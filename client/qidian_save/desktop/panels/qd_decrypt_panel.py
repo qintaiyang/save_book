@@ -488,30 +488,48 @@ class QDDecryptPanel(QWidget):
                 QTimer.singleShot(0, self._update_selected_count)
 
     def _toggle_select_all(self):
-        """切换全选/取消（按用户分组，只操作展开的用户）"""
-        # 第一遍：检查是否全部已选
-        all_checked = True
-        for i in range(self.tree.topLevelItemCount()):
-            user = self.tree.topLevelItem(i)
-            for j in range(user.childCount()):
-                book = user.child(j)
-                for k in range(book.childCount()):
-                    if book.child(k).checkState(0) != Qt.CheckState.Checked:
-                        all_checked = False
-                        break
-                if not all_checked:
-                    break
-            if not all_checked:
+        """全选当前选中书籍的全部章节"""
+        # 找当前选中的书籍节点
+        book_item = None
+        selected = self.tree.selectedItems()
+        for item in selected:
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if isinstance(data, dict) and data.get("bookId"):
+                # 选中了书籍节点
+                book_item = item
+                break
+            elif isinstance(data, tuple) and data[0] == "chapter":
+                # 选中了章节 → 找父节点（书籍）
+                book_item = item.parent()
+                break
+            elif isinstance(data, tuple) and data[0] == "user":
+                # 选中了用户 → 取该用户下第一本书
+                if item.childCount() > 0:
+                    book_item = item.child(0)
                 break
 
-        # 第二遍：切换状态
+        # 仍然没找到 → 取树中第一本书
+        if not book_item:
+            for i in range(self.tree.topLevelItemCount()):
+                user = self.tree.topLevelItem(i)
+                if user.childCount() > 0:
+                    book_item = user.child(0)
+                    break
+
+        if not book_item:
+            return  # 树上没有书
+
+        # 检查该书籍下是否全部已选
+        all_checked = True
+        for k in range(book_item.childCount()):
+            if book_item.child(k).checkState(0) != Qt.CheckState.Checked:
+                all_checked = False
+                break
+
+        # 切换该书籍下所有章节
         new_state = Qt.CheckState.Unchecked if all_checked else Qt.CheckState.Checked
-        for i in range(self.tree.topLevelItemCount()):
-            user = self.tree.topLevelItem(i)
-            for j in range(user.childCount()):
-                book = user.child(j)
-                for k in range(book.childCount()):
-                    book.child(k).setCheckState(0, new_state)
+        for k in range(book_item.childCount()):
+            book_item.child(k).setCheckState(0, new_state)
 
         self._update_selected_count()
 
