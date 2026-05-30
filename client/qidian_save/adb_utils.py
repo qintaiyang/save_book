@@ -1,10 +1,29 @@
-"""ADB 工具 — 从 Android 设备拉取 QDReader .qd 文件及数据库"""
+"""ADB 工具 — 从 Android 设备拉取 QDReader .qd 文件及数据库
+
+ADB 查找优先级：
+  1. 项目捆绑的 client/adb/adb.exe
+  2. 系统 PATH 中的 adb
+"""
 import json, os, subprocess, sqlite3, struct, sys, zipfile, re, tempfile
 from pathlib import Path
 from typing import Optional
 
 ADB_BASE = "/storage/emulated/0/Android/data/com.qidian.QDReader/files/QDReader/book"
 PROJECT_DIR = Path(__file__).resolve().parent.parent
+
+
+def _find_adb() -> str:
+    """查找可用的 adb 可执行文件路径
+
+    优先使用项目捆绑的 adb，找不到则回退到系统 PATH。
+    """
+    bundled = PROJECT_DIR / "adb"
+    for exe in ["adb.exe", "adb"]:
+        p = bundled / exe
+        if p.exists():
+            return str(p)
+    # 回退到系统 PATH
+    return "adb"
 
 # 设备内 priv-app 路径（root 访问）
 _PRIV_DB = "/data/data/com.qidian.QDReader/databases"
@@ -17,9 +36,13 @@ def _log(msg: str):
 
 # ── 多设备支持 ──────────────────────────────────────────────────────
 
+_ADB_PATH = _find_adb()  # 缓存 adb 路径
+
+
 def _adb_prefix(device_serial: str | None = None) -> list[str]:
     """返回 adb 前缀，如果指定设备则加 -s"""
-    return ["adb", "-s", device_serial] if device_serial else ["adb"]
+    base = [_ADB_PATH]
+    return base + ["-s", device_serial] if device_serial else base
 
 
 def list_devices() -> list[dict]:
@@ -29,7 +52,7 @@ def list_devices() -> list[dict]:
         [{"serial": str, "status": str}, ...]
     """
     try:
-        r = subprocess.run(["adb", "devices"], capture_output=True, text=True, timeout=5)
+        r = subprocess.run([_ADB_PATH, "devices"], capture_output=True, text=True, timeout=5)
         devices = []
         for line in r.stdout.splitlines():
             line = line.strip()

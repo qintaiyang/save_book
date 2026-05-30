@@ -34,3 +34,6 @@ client/data/
 client/data/
 qd_files/
 _capture_runner.py
+
+# Non-essential ADB extras (keep only what's needed for basic adb)
+client/adb/extra/
