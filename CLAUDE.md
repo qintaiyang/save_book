@@ -56,8 +56,8 @@ E:\data\网站\qi_dian save\     ← 父目录（非 git 仓库）
 
 ## 分支策略
 
-当前分支：`client-bate`（开发），稳定分支：`client-main`。
-开发在 `client-bate` 进行，完成后合并到 `client-main`。
+当前分支：`client-main`（唯一分支，集开发与稳定于一体）。
+（`main` 和 `client-bate` 已合并/删除，现在统一在 `client-main` 上开发）
 
 ## 客户端架构
 
