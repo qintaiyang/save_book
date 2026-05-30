@@ -207,12 +207,14 @@ class BackupPanel(QWidget):
                 try:
                     safe_name = cname.replace("/", "_")[:60]
                     if has_html:
-                        content = self.client.download_chapter_html(
-                            self.task_id, cid
+                        content = self.client.download_chapter(
+                            self.task_id, cid, format="html"
                         )
                         ext = ".html"
                     else:
-                        data = self.client.download_chapter(self.task_id, cid)
+                        data = self.client.download_chapter(
+                            self.task_id, cid, format="text"
+                        )
                         content = data["decodedText"]
                         ext = ".txt"
                     path = os.path.join(self._download_dir, f"{safe_name}{ext}")

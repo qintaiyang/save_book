@@ -1,7 +1,7 @@
 """纯 API 调用封装 — 不包含任何业务逻辑"""
 import os, zipfile, tempfile
 import requests
-from typing import Optional
+from typing import Optional, Union
 
 
 class ApiError(Exception):
@@ -91,6 +91,10 @@ class QidianSaveClient:
     def get_me(self) -> dict:
         return self._get("/api/auth/me")
 
+    def renew_api_key(self) -> dict:
+        """重新生成 API Key"""
+        return self._post("/api/auth/api-key/regenerate")
+
     # ── Books ──
 
     def search_books(self, keyword: str, page: int = 1) -> list:
@@ -130,22 +134,22 @@ class QidianSaveClient:
         data = self._get(f"/api/backup/{task_id}/chapters")
         return data.get("chapters", [])
 
-    def download_chapter(self, task_id: int, chapter_id: str) -> dict:
-        """下载纯文本格式章节，返回 {"decodedText": "..."}"""
-        return self._get(f"/api/backup/{task_id}/chapters/{chapter_id}")
+    def download_chapter(self, task_id: int, chapter_id: str, format: str = "text") -> Union[dict, str]:
+        """下载章节内容
 
-    def download_chapter_html(self, task_id: int, chapter_id: str) -> str:
-        """下载 HTML 格式章节 — 调用独立 HTML 端点 /html
-
-        Returns:
-            原始 HTML 文本
+        Args:
+            format: "text" 返回 {"decodedText": "..."}
+                    "html" 返回原始 HTML 字符串
         """
         resp = self.session.get(
-            f"{self.base_url}/api/backup/{task_id}/chapters/{chapter_id}/html",
+            f"{self.base_url}/api/backup/{task_id}/chapters/{chapter_id}",
+            params={"format": format},
             timeout=30,
         )
         self._raise_on_error(resp)
-        return resp.text
+        if format == "html":
+            return resp.text
+        return resp.json()
 
     def cleanup_task(self, task_id: int) -> dict:
         return self._delete(f"/api/backup/{task_id}")
