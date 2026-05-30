@@ -431,36 +431,51 @@ class QDDecryptPanel(QWidget):
             self._set_busy(False)
             return
 
+        # 按用户分组（dict 插入有序，Python 3.7+）
+        user_books = {}
         for b in books:
-            vip_count = sum(1 for ch in b["chapters"] if ch["isVip"])
-            free_count = sum(1 for ch in b["chapters"] if not ch["isVip"])
-            label = f"  📖 {b['bookName']} ({b['bookId']})"
-            status = f"{b['total']} 章"
-            info = f"免费{free_count}+付费{vip_count}"
+            uid = b.get("userId", "unknown")
+            user_books.setdefault(uid, []).append(b)
 
-            book_item = QTreeWidgetItem([label, status, info])
-            book_item.setData(0, Qt.ItemDataRole.UserRole, b)
-            book_item.setChildIndicatorPolicy(QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator)
-            book_item.setExpanded(True)  # 默认展开
+        for uid, ub in user_books.items():
+            # 用户级别
+            user_item = QTreeWidgetItem([f"  👤 用户 {uid}", f"{len(ub)} 本书", ""])
+            user_item.setData(0, Qt.ItemDataRole.UserRole, ("user", uid))
+            user_item.setChildIndicatorPolicy(QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator)
+            user_item.setExpanded(True)
 
-            # 显示所有章节（带复选框）
-            for ch in b["chapters"]:
-                vip_tag = "🔒" if ch["isVip"] else "📄"
-                size_kb = ch.get("size", 0) // 1024
-                ch_item = QTreeWidgetItem([
-                    f"  {vip_tag} {ch['name']}",
-                    ch["id"],
-                    f"{size_kb}KB",
-                ])
-                ch_item.setData(0, Qt.ItemDataRole.UserRole, ("chapter", b["bookId"], ch))
-                ch_item.setFlags(ch_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                ch_item.setCheckState(0, Qt.CheckState.Unchecked)
-                self._chapter_map[ch["id"]] = ch["name"]
-                book_item.addChild(ch_item)
+            for b in ub:
+                vip_count = sum(1 for ch in b["chapters"] if ch["isVip"])
+                free_count = sum(1 for ch in b["chapters"] if not ch["isVip"])
+                label = f"  📖 {b['bookName']} ({b['bookId']})"
+                status = f"{b['total']} 章"
+                info = f"免费{free_count}+付费{vip_count}"
 
-            self.tree.addTopLevelItem(book_item)
+                book_item = QTreeWidgetItem([label, status, info])
+                book_item.setData(0, Qt.ItemDataRole.UserRole, b)
+                book_item.setChildIndicatorPolicy(QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator)
 
-        self._sig.log.emit(f"找到 {len(books)} 本书，共 {sum(b['total'] for b in books)} 章")
+                # 显示所有章节（带复选框）
+                for ch in b["chapters"]:
+                    vip_tag = "🔒" if ch["isVip"] else "📄"
+                    size_kb = ch.get("size", 0) // 1024
+                    ch_item = QTreeWidgetItem([
+                        f"  {vip_tag} {ch['name']}",
+                        ch["id"],
+                        f"{size_kb}KB",
+                    ])
+                    ch_item.setData(0, Qt.ItemDataRole.UserRole, ("chapter", b["bookId"], ch))
+                    ch_item.setFlags(ch_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                    ch_item.setCheckState(0, Qt.CheckState.Unchecked)
+                    self._chapter_map[ch["id"]] = ch["name"]
+                    book_item.addChild(ch_item)
+
+                user_item.addChild(book_item)
+
+            self.tree.addTopLevelItem(user_item)
+
+        total_chapters = sum(b['total'] for b in books)
+        self._sig.log.emit(f"找到 {len(user_books)} 个用户, {len(books)} 本书, 共 {total_chapters} 章")
         self._set_busy(False)
 
     # ── 全选/取消 ───────────────────────────────────────────────────
@@ -473,51 +488,61 @@ class QDDecryptPanel(QWidget):
                 QTimer.singleShot(0, self._update_selected_count)
 
     def _toggle_select_all(self):
-        """切换全选/取消"""
+        """切换全选/取消（按用户分组，只操作展开的用户）"""
+        # 第一遍：检查是否全部已选
         all_checked = True
-        # 检查当前是否全部已选
         for i in range(self.tree.topLevelItemCount()):
-            book = self.tree.topLevelItem(i)
-            for j in range(book.childCount()):
-                ch = book.child(j)
-                if ch.checkState(0) != Qt.CheckState.Checked:
-                    all_checked = False
+            user = self.tree.topLevelItem(i)
+            for j in range(user.childCount()):
+                book = user.child(j)
+                for k in range(book.childCount()):
+                    if book.child(k).checkState(0) != Qt.CheckState.Checked:
+                        all_checked = False
+                        break
+                if not all_checked:
                     break
             if not all_checked:
                 break
 
+        # 第二遍：切换状态
         new_state = Qt.CheckState.Unchecked if all_checked else Qt.CheckState.Checked
         for i in range(self.tree.topLevelItemCount()):
-            book = self.tree.topLevelItem(i)
-            for j in range(book.childCount()):
-                book.child(j).setCheckState(0, new_state)
+            user = self.tree.topLevelItem(i)
+            for j in range(user.childCount()):
+                book = user.child(j)
+                for k in range(book.childCount()):
+                    book.child(k).setCheckState(0, new_state)
 
         self._update_selected_count()
 
     def _update_selected_count(self):
         count = 0
         for i in range(self.tree.topLevelItemCount()):
-            book = self.tree.topLevelItem(i)
-            for j in range(book.childCount()):
-                if book.child(j).checkState(0) == Qt.CheckState.Checked:
-                    count += 1
+            user = self.tree.topLevelItem(i)
+            for j in range(user.childCount()):
+                book = user.child(j)
+                for k in range(book.childCount()):
+                    if book.child(k).checkState(0) == Qt.CheckState.Checked:
+                        count += 1
         self.btn_decrypt.setText(f"  解密选中章节 ({count})" if count else "  解密选中章节")
         self.btn_decrypt.setEnabled(count > 0)
 
     # ── 解密 ────────────────────────────────────────────────────────
 
     def _do_decrypt(self):
-        # 收集勾选的章节（跨多本书）
+        # 收集勾选的章节（3 层树：User → Book → Chapter）
         chapters_to_decrypt = []
         for i in range(self.tree.topLevelItemCount()):
-            book = self.tree.topLevelItem(i)
-            for j in range(book.childCount()):
-                ch = book.child(j)
-                if ch.checkState(0) == Qt.CheckState.Checked:
-                    ch_data = ch.data(0, Qt.ItemDataRole.UserRole)
-                    if ch_data:
-                        _, bid, ch_info = ch_data
-                        chapters_to_decrypt.append((bid, ch_info["id"], ch_info["name"]))
+            user_item = self.tree.topLevelItem(i)
+            for j in range(user_item.childCount()):
+                book = user_item.child(j)
+                for k in range(book.childCount()):
+                    ch = book.child(k)
+                    if ch.checkState(0) == Qt.CheckState.Checked:
+                        ch_data = ch.data(0, Qt.ItemDataRole.UserRole)
+                        if ch_data:
+                            _, bid, ch_info = ch_data
+                            chapters_to_decrypt.append((bid, ch_info["id"], ch_info["name"]))
 
         if not chapters_to_decrypt:
             return
@@ -540,29 +565,31 @@ class QDDecryptPanel(QWidget):
                 import time, tempfile
                 qd_files = []  # [(full_path, arcname_in_zip)]
                 for i in range(self.tree.topLevelItemCount()):
-                    book_item = self.tree.topLevelItem(i)
-                    bdata = book_item.data(0, Qt.ItemDataRole.UserRole)
-                    if not bdata:
-                        continue
-                    bid = bdata["bookId"]
-                    u_dir = bdata.get("userId", uid)
+                    user_item = self.tree.topLevelItem(i)
+                    for j in range(user_item.childCount()):
+                        book_item = user_item.child(j)
+                        bdata = book_item.data(0, Qt.ItemDataRole.UserRole)
+                        if not bdata:
+                            continue
+                        bid = bdata["bookId"]
+                        u_dir = bdata.get("userId", uid)
 
-                    book_chapters = [c for c in chapters_to_decrypt if c[0] == bid]
-                    if not book_chapters:
-                        continue
+                        book_chapters = [c for c in chapters_to_decrypt if c[0] == bid]
+                        if not book_chapters:
+                            continue
 
-                    book_dir = Path(self._qd_dir) / u_dir / bid
-                    if not book_dir.exists():
-                        self._sig.log.emit(f"⚠ 未找到书籍目录: {bid}")
-                        continue
+                        book_dir = Path(self._qd_dir) / u_dir / bid
+                        if not book_dir.exists():
+                            self._sig.log.emit(f"⚠ 未找到书籍目录: {bid}")
+                            continue
 
-                    for ch_id, _ch_name in [(c[1], c[2]) for c in book_chapters]:
-                        fp = book_dir / f"{ch_id}.qd"
-                        if fp.exists():
-                            # arcname 用 bookId/chapterId.qd 避免跨书文件名冲突
-                            qd_files.append((str(fp), f"{bid}/{ch_id}.qd"))
-                        else:
-                            self._sig.log.emit(f"⚠ 未找到章节文件: {bid}/{ch_id}.qd")
+                        for ch_id, _ch_name in [(c[1], c[2]) for c in book_chapters]:
+                            fp = book_dir / f"{ch_id}.qd"
+                            if fp.exists():
+                                # arcname 用 bookId/chapterId.qd 避免跨书文件名冲突
+                                qd_files.append((str(fp), f"{bid}/{ch_id}.qd"))
+                            else:
+                                self._sig.log.emit(f"⚠ 未找到章节文件: {bid}/{ch_id}.qd")
 
                 if not qd_files:
                     self._sig.error.emit("未找到对应的 .qd 文件（章节可能未下载到手机）")
