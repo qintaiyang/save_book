@@ -29,7 +29,7 @@ def cmd_desktop(args):
     main()
 
 def _get_client(args) -> QidianSaveClient:
-    base = os.getenv("QIDIAN_SAVE_URL", "http://3.35.241.187:8000")
+    base = os.getenv("QIDIAN_SAVE_URL", "https://autohelp.asia/")
     token = os.getenv("QIDIAN_SAVE_TOKEN", "") or _load_token()
     api_key = os.getenv("QIDIAN_SAVE_API_KEY", "")
     return QidianSaveClient(base, token=token, api_key=api_key)

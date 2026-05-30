@@ -243,7 +243,7 @@ def main():
     # 初始化
     set_cookie_path()
 
-    base = os.getenv("QIDIAN_SAVE_URL", "http://3.35.241.187:8000")
+    base = os.getenv("QIDIAN_SAVE_URL", "https://autohelp.asia/")
     token = os.getenv("QIDIAN_SAVE_TOKEN", "") or _load_token()
     client = QidianSaveClient(base, token=token)
 
