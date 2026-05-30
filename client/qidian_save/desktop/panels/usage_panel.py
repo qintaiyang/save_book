@@ -1,7 +1,7 @@
 """用量查询面板 — 显示今日用量 + 套餐信息"""
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QFrame, QProgressBar,
+    QFrame, QProgressBar, QMessageBox,
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
@@ -90,6 +90,13 @@ class UsagePanel(QWidget):
         self.btn_refresh.clicked.connect(self._refresh)
         cl.addWidget(self.btn_refresh)
 
+        # Renew API Key button
+        self.btn_renew = QPushButton("  重新生成 API Key")
+        self.btn_renew.setProperty("btn-type", "danger")
+        self.btn_renew.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_renew.clicked.connect(self._renew_api_key)
+        cl.addWidget(self.btn_renew)
+
         # Reset time
         self.label_reset = QLabel("")
         self.label_reset.setStyleSheet("font-size: 12px; color: #9ca3af;")
@@ -122,3 +129,32 @@ class UsagePanel(QWidget):
             for lbl in self._stat_labels.values():
                 lbl.setText("?")
             self.label_reset.setText(f"查询失败: {str(e)}")
+
+    def _renew_api_key(self):
+        """重新生成 API Key（需要用户确认）"""
+        reply = QMessageBox.question(
+            self,
+            "确认重新生成",
+            "确定要重新生成 API Key？\n\n旧的 Key 将立即失效，需要更新所有使用该 Key 的地方。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            result = self.client.renew_api_key()
+            new_key = result.get("api_key", "未知")
+            QMessageBox.information(
+                self,
+                "API Key 已重新生成",
+                f"新的 API Key:\n{new_key}\n\n请妥善保管，旧的 Key 已失效。",
+            )
+            # 刷新用量显示
+            self._refresh()
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "重新生成失败",
+                f"API Key 重新生成失败:\n{str(e)}",
+            )

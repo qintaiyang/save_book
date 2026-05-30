@@ -108,7 +108,7 @@ qidian_save/
 
 ## 📖 API 文档
 
-服务端 API 文档：[https://autohelp.asia/docs/api.md](https://autohelp.asia/docs/api.md)
+服务端 API 文档：[https://autohelp.asia/docs#/](https://autohelp.asia/docs#/)
 
 包含所有可用端点、请求格式和返回示例：
 - 认证 API（GitHub Device Flow / JWT）
