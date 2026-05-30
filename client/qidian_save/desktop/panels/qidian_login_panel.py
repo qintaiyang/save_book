@@ -77,7 +77,7 @@ class QidianLoginPanel(QWidget):
         sl.addWidget(self.label_qr)
 
         self.btn_generate = QPushButton("  生成二维码")
-        self.btn_generate.setProperty("class", "secondary")
+        self.btn_generate.setProperty("btn-type", "secondary")
         self.btn_generate.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_generate.clicked.connect(self._generate_qr)
         sl.addWidget(self.btn_generate)

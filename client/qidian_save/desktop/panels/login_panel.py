@@ -95,7 +95,7 @@ class LoginPanel(QWidget):
         cc.addWidget(self.label_uri)
 
         self.btn_open = QPushButton("  打开浏览器")
-        self.btn_open.setProperty("class", "secondary")
+        self.btn_open.setProperty("btn-type", "secondary")
         self.btn_open.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_open.clicked.connect(self._open_browser)
         cc.addWidget(self.btn_open)

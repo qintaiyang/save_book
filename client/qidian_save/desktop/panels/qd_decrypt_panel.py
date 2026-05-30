@@ -62,21 +62,21 @@ class QDDecryptPanel(QWidget):
         tr.addWidget(self.input_device)
 
         self.btn_pull = QPushButton("  拉取书籍")
-        self.btn_pull.setProperty("class", "secondary")
+        self.btn_pull.setProperty("btn-type", "secondary")
         self.btn_pull.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_pull.setFixedHeight(38)
         self.btn_pull.clicked.connect(self._pull_books)
         tr.addWidget(self.btn_pull)
 
         self.btn_open_dir = QPushButton("  打开目录")
-        self.btn_open_dir.setProperty("class", "secondary")
+        self.btn_open_dir.setProperty("btn-type", "secondary")
         self.btn_open_dir.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_open_dir.setFixedHeight(38)
         self.btn_open_dir.clicked.connect(self._open_dir)
         tr.addWidget(self.btn_open_dir)
 
         self.btn_root_extract = QPushButton("  root提取")
-        self.btn_root_extract.setProperty("class", "secondary")
+        self.btn_root_extract.setProperty("btn-type", "secondary")
         self.btn_root_extract.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_root_extract.setFixedHeight(38)
         self.btn_root_extract.clicked.connect(self._root_extract)
@@ -145,13 +145,13 @@ class QDDecryptPanel(QWidget):
         params_row.addWidget(self.input_userid, 1)
 
         btn_load = QPushButton("加载")
-        btn_load.setProperty("class", "secondary")
+        btn_load.setProperty("btn-type", "secondary")
         btn_load.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_load.clicked.connect(self._load_config)
         params_row.addWidget(btn_load)
 
         btn_save = QPushButton("保存")
-        btn_save.setProperty("class", "secondary")
+        btn_save.setProperty("btn-type", "secondary")
         btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_save.clicked.connect(self._save_config)
         params_row.addWidget(btn_save)
@@ -159,7 +159,7 @@ class QDDecryptPanel(QWidget):
         bl.addLayout(params_row)
 
         self.btn_decrypt = QPushButton("  🔓 解密选中章节")
-        self.btn_decrypt.setProperty("class", "success")
+        self.btn_decrypt.setProperty("btn-type", "success")
         self.btn_decrypt.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_decrypt.setFixedHeight(40)
         self.btn_decrypt.setEnabled(False)
@@ -167,7 +167,7 @@ class QDDecryptPanel(QWidget):
         action_row.addWidget(self.btn_decrypt)
 
         self.btn_select_all = QPushButton("全选")
-        self.btn_select_all.setProperty("class", "secondary")
+        self.btn_select_all.setProperty("btn-type", "secondary")
         self.btn_select_all.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_select_all.clicked.connect(self._toggle_select_all)
         action_row.addWidget(self.btn_select_all)

@@ -124,7 +124,7 @@ class BackupPanel(QWidget):
         cr.addWidget(self.btn_refresh)
 
         self.btn_download_all = QPushButton("  下载全部")
-        self.btn_download_all.setProperty("class", "success")
+        self.btn_download_all.setProperty("btn-type", "success")
         self.btn_download_all.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_download_all.clicked.connect(self._download_all)
         cr.addWidget(self.btn_download_all)
@@ -134,7 +134,7 @@ class BackupPanel(QWidget):
         cr.addWidget(self.label_dl_progress)
 
         self.btn_cleanup = QPushButton("  清理任务")
-        self.btn_cleanup.setProperty("class", "danger")
+        self.btn_cleanup.setProperty("btn-type", "danger")
         self.btn_cleanup.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_cleanup.clicked.connect(self._cleanup)
         cr.addWidget(self.btn_cleanup)

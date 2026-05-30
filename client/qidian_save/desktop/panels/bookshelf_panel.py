@@ -47,7 +47,7 @@ class BookshelfPanel(QWidget):
         tr.setSpacing(12)
 
         self.btn_refresh = QPushButton("  刷新书架")
-        self.btn_refresh.setProperty("class", "secondary")
+        self.btn_refresh.setProperty("btn-type", "secondary")
         self.btn_refresh.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_refresh.clicked.connect(self._load_bookshelf)
         tr.addWidget(self.btn_refresh)

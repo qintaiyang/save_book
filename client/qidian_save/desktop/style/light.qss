@@ -15,21 +15,21 @@ QWidget[class="QWidget"] {
 }
 
 /* ── 面板上的卡片容器 ────────────────────────────────── */
-QFrame#CardWidget, QFrame[class="card"] {
+QFrame#CardWidget, QFrame[widget-type="card"] {
     background-color: #ffffff;
     border: none;
     border-radius: 10px;
 }
 
 /* ── 面板标题 ─────────────────────────────────────────── */
-QLabel[class="panel-title"] {
+QLabel[widget-type="panel-title"] {
     font-size: 22px;
     font-weight: 700;
     color: #1d1d1f;
     padding: 0;
 }
 
-QLabel[class="panel-subtitle"] {
+QLabel[widget-type="panel-subtitle"] {
     font-size: 13px;
     color: #86868b;
 }
@@ -74,52 +74,52 @@ QPushButton:disabled {
 }
 
 /* 次要按钮 — 通过设置 class="secondary" 生效 */
-QPushButton[class="secondary"] {
+QPushButton[btn-type="secondary"] {
     background-color: #ffffff;
     color: #007aff;
     border: 1px solid #d2d2d7;
 }
-QPushButton[class="secondary"]:hover {
+QPushButton[btn-type="secondary"]:hover {
     background-color: #f0f0f5;
     border-color: #007aff;
 }
 
 /* 成功按钮（备份/下载） */
-QPushButton[class="success"] {
+QPushButton[btn-type="success"] {
     background-color: #34c759;
     color: white;
     border: none;
     border-radius: 8px;
     padding: 8px 20px;
 }
-QPushButton[class="success"]:hover {
+QPushButton[btn-type="success"]:hover {
     background-color: #28a745;
 }
-QPushButton[class="success"]:disabled {
+QPushButton[btn-type="success"]:disabled {
     background-color: #a3d9b1;
     color: #ffffff;
 }
 
 /* 危险按钮 */
-QPushButton[class="danger"] {
+QPushButton[btn-type="danger"] {
     background-color: #ff3b30;
     color: white;
     border: none;
     border-radius: 8px;
     padding: 8px 20px;
 }
-QPushButton[class="danger"]:hover {
+QPushButton[btn-type="danger"]:hover {
     background-color: #d62d20;
 }
 
 /* 幽灵/文字按钮 */
-QPushButton[class="ghost"] {
+QPushButton[btn-type="ghost"] {
     background-color: transparent;
     color: #007aff;
     border: none;
     padding: 4px 12px;
 }
-QPushButton[class="ghost"]:hover {
+QPushButton[btn-type="ghost"]:hover {
     background-color: rgba(0, 122, 255, 0.08);
     border-radius: 6px;
 }
