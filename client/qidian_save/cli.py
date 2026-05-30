@@ -244,6 +244,16 @@ def cmd_usage(args):
     print(f"剩余: {u['remaining']} 次")
 
 
+def cmd_renew_api_key(args):
+    """重新生成 API Key"""
+    client = _get_client(args)
+    print("正在重新生成 API Key...")
+    result = client.renew_api_key()
+    api_key = result.get("api_key", "未知")
+    print(f"\n新的 API Key: {api_key}")
+    print("请更新你的 API Key 配置。旧的 API Key 已失效。")
+
+
 # ── .qd 配置 ──────────────────────────────────────────────────────
 
 def cmd_qd_config(args):
@@ -474,6 +484,9 @@ def build_parser():
 
     p_usage = sub.add_parser("usage", help="查看用量")
     p_usage.set_defaults(func=cmd_usage)
+
+    p_renew = sub.add_parser("renew-api-key", help="重新生成 API Key")
+    p_renew.set_defaults(func=cmd_renew_api_key)
 
     p_qd_cfg = sub.add_parser("qd-config", help="查看/设置 .qd 解密配置")
     p_qd_cfg.add_argument("--set", help="设置配置项 (key=value)")
