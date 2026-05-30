@@ -48,8 +48,10 @@ class QDDecryptPanel(QWidget):
         tr = QHBoxLayout(top)
         tr.setSpacing(10)
 
-        self.label_device = QLabel("⏳ 检测 ADB...")
-        self.label_device.setStyleSheet("font-size: 13px; padding: 4px 8px;")
+        self.label_device = QPushButton("⏳ 检测 ADB...")
+        self.label_device.setStyleSheet("font-size: 13px; padding: 4px 8px; border: none; text-align: left; background: transparent;")
+        self.label_device.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.label_device.clicked.connect(self._check_device)
         tr.addWidget(self.label_device)
 
         self.input_device = QLineEdit()
@@ -213,16 +215,35 @@ class QDDecryptPanel(QWidget):
         return text
 
     def _check_device(self):
+        """检测 ADB 状态（与 _resolve_serial 逻辑一致）"""
         try:
-            from ...adb_utils import check_device
-            ok = check_device()
-            self.label_device.setText("✅ ADB 已连接" if ok else "❌ 未连接手机")
+            from ...adb_utils import list_devices
+            devices = list_devices()
+            # 优先真机，无真机时模拟器也可用（与 _resolve_serial 一致）
+            real = [d for d in devices if "emulator" not in d["serial"]]
+            if real:
+                text = f"✅ 真机已连接 ({real[0]['serial']})"
+                color = "#065f46"
+            elif devices:
+                text = f"✅ 模拟器已连接 ({devices[0]['serial']})"
+                color = "#065f46"
+            else:
+                text = "❌ 未检测到设备（点击重试）"
+                color = "#dc2626"
+            self.label_device.setText(text)
             self.label_device.setStyleSheet(
-                "font-size: 13px; padding: 4px 8px; color: #065f46;"
-                if ok else "font-size: 13px; padding: 4px 8px; color: #dc2626;"
+                f"font-size: 13px; padding: 4px 8px; border: none; text-align: left; background: transparent; color: {color};"
             )
-        except Exception:
-            self.label_device.setText("❌ ADB 不可用")
+        except FileNotFoundError:
+            self.label_device.setText("❌ 未找到 adb（点击重试）")
+            self.label_device.setStyleSheet(
+                "font-size: 13px; padding: 4px 8px; border: none; text-align: left; background: transparent; color: #dc2626;"
+            )
+        except Exception as e:
+            self.label_device.setText(f"❌ ADB 异常: {str(e)[:40]}")
+            self.label_device.setStyleSheet(
+                "font-size: 13px; padding: 4px 8px; border: none; text-align: left; background: transparent; color: #dc2626;"
+            )
 
     # ── root 直接提取 ──────────────────────────────────────────────
 
