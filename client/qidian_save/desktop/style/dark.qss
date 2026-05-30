@@ -7,6 +7,11 @@ QMainWindow, QWidget#FluentWindow {
     background-color: #1c1c1e;
 }
 
+/* 登录对话框背景 */
+QDialog {
+    background-color: #1c1c1e;
+}
+
 /* ── 面板上的卡片 ────────────────────────────────────── */
 QFrame#CardWidget, QFrame[widget-type="card"], QFrame#section {
     background-color: #2c2c2e;

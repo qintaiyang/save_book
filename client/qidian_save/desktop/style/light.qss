@@ -8,6 +8,11 @@ QMainWindow, QWidget#FluentWindow {
     background-color: #f5f5f7;
 }
 
+/* 登录对话框背景 */
+QDialog {
+    background-color: #ffffff;
+}
+
 /* ── 内容区背景 ───────────────────────────────────────── */
 /* FluentWindow 内容区 */
 QWidget[class="QWidget"] {
