@@ -153,10 +153,10 @@ def cmd_backup(args):
         safe_name = ch.get("chapterName", ch["chapterId"]).replace("/", "_")[:60]
         has_html = ch.get("hasHtml", False)
         if has_html:
-            content = client.download_chapter_html(task_id, ch["chapterId"])
+            content = client.download_chapter(task_id, ch["chapterId"], format="html")
             ext = ".html"
         else:
-            data = client.download_chapter(task_id, ch["chapterId"])
+            data = client.download_chapter(task_id, ch["chapterId"], format="text")
             content = data["decodedText"]
             ext = ".txt"
         path = os.path.join(output_dir, f"{safe_name}{ext}")
