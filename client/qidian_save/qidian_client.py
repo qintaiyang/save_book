@@ -389,3 +389,56 @@ def save_cookies(cookies: dict):
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(cookies, f, ensure_ascii=False, indent=2)
+
+
+def get_chapter_data(book_id: str, chapter_id: str, cookies: dict = None) -> Optional[dict]:
+    """获取单章原始加密数据（调起点移动端 AJAX API）
+
+    返回 decode-zip 输入格式：
+        {chapterId, chapterName, cES, content, css, randomFont, fkp}
+
+    返回 None 表示未购买或网络异常。
+    """
+    url = "https://m.qidian.com/majax/chapter/getChapterInfo"
+    params = {"bookId": book_id, "chapterId": chapter_id}
+    headers = {
+        "User-Agent": MOBILE_UA,
+        "Accept": "application/json",
+        "Accept-Language": "zh-CN,zh;q=0.9",
+        "Referer": f"https://m.qidian.com/chapter/{book_id}/{chapter_id}/",
+    }
+    for attempt in range(2):
+        try:
+            resp = _SESSION.get(url, params=params, headers=headers,
+                                cookies=cookies or {}, timeout=15)
+            if resp.status_code != 200:
+                log(f"get_chapter_data HTTP {resp.status_code} ({book_id}/{chapter_id})")
+                if attempt < 1:
+                    time.sleep(1)
+                    continue
+                return None
+            data = resp.json()
+            if data.get("code") != 0:
+                # code=1 = 未购买
+                log(f"get_chapter_data code={data.get('code')} ({book_id}/{chapter_id})")
+                return None
+            ci = data["data"]["chapterInfo"]
+            return {
+                "chapterId": chapter_id,
+                "chapterName": ci.get("chapterName", ""),
+                "cES": ci.get("cES", 0),
+                "content": ci.get("content", ""),
+                "css": ci.get("css", ""),
+                "randomFont": ci.get("randomFont", ""),
+                "fkp": ci.get("fkp", ""),
+            }
+        except requests.RequestException as e:
+            log(f"get_chapter_data 异常: {e} ({book_id}/{chapter_id})")
+            if attempt < 1:
+                time.sleep(1)
+                continue
+            return None
+        except (KeyError, ValueError, json.JSONDecodeError) as e:
+            log(f"get_chapter_data 解析失败: {e} ({book_id}/{chapter_id})")
+            return None
+    return None
