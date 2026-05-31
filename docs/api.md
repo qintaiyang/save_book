@@ -37,47 +37,7 @@ Header: Authorization: Bearer <token>
 Response: {"id": 1, "username": "...", "role": "free", "dailyLimit": 1000}
 ```
 
-## 书籍
-
-### 搜索书籍
-```
-GET /api/books/search?q=仙侠&page=1
-Response: {"results": [{"bookId": "123", "bookName": "...", "authorName": "..."}]}
-```
-
-### 书籍详情
-```
-GET /api/books/{bookId}/info
-```
-
-### 获取目录
-```
-GET /api/books/{bookId}/catalog
-Response: {"bookName": "...", "totalChapters": 100, "chapters": [...]}
-```
-
 ## 备份
-
-### 起点扫码
-
-#### 获取二维码
-```
-POST /api/backup/qr
-Response: {
-  "pollKey": "abc123",         # 用于轮询扫码状态
-  "sessionKey": "...",
-  "imageBase64": "..."         # 图片 base64，不含 data: 前缀
-}
-```
-
-#### 轮询扫码状态
-```
-POST /api/backup/qr/poll
-Body: {"poll_key": "abc123"}
-Response (完成): {"status": "done", "cookiesRef": "ref_xxx", "ywguid": "123456"}
-Response (已扫码): {"status": "scanned"}
-Response (等待):  {"status": "waiting"}
-```
 
 ### 上传 Cookie（客户端本地扫码后用）
 ```
@@ -233,11 +193,10 @@ GitHub Device Flow:
 ## 备份工作流（客户端参考）
 
 ```
-1. 扫码登录起点
-   POST /api/backup/qr → 获取二维码 → 用户扫码
-   POST /api/backup/qr/poll → 轮询直到 status=done → 得到 cookiesRef
+1. 客户端扫码登录起点（本地直调 m.qidian.com）
+   → 得到起点 Cookie
 
-2. 或者直接上传本地 Cookie
+2. 上传 Cookie 到服务端
    POST /api/backup/cookies {"cookies": {...}} → 得到 cookiesRef
 
 3. 创建备份任务
@@ -252,5 +211,5 @@ GitHub Device Flow:
 
 6. 下载内容
    纯文本: GET /api/backup/{taskId}/chapters/{chapterId}
-   HTML:   GET /api/backup/{taskId}/chapters/{chapterId}/html
+   HTML:   GET /api/backup/{taskId}/chapters/{chapterId}?format=html
 ```

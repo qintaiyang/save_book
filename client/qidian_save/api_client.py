@@ -95,25 +95,7 @@ class QidianSaveClient:
         """重新生成 API Key"""
         return self._post("/api/auth/api-key/regenerate")
 
-    # ── Books ──
-
-    def search_books(self, keyword: str, page: int = 1) -> list:
-        data = self._get("/api/books/search", params={"q": keyword, "page": page})
-        return data.get("results", [])
-
-    def get_book_info(self, book_id: str) -> dict:
-        return self._get(f"/api/books/{book_id}/info")
-
-    def get_catalog(self, book_id: str) -> dict:
-        return self._get(f"/api/books/{book_id}/catalog")
-
     # ── Backup ──
-
-    def backup_qr(self) -> dict:
-        return self._post("/api/backup/qr")
-
-    def backup_qr_poll(self, poll_key: str) -> dict:
-        return self._post("/api/backup/qr/poll", json={"poll_key": poll_key})
 
     def upload_qidian_cookies(self, cookies: dict) -> dict:
         """上传起点 Cookie 到服务端，返回 cookies_ref"""

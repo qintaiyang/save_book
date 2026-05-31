@@ -86,7 +86,7 @@ client = QidianSaveClient(
     "https://your-server.com",
     api_key="your-api-key"
 )
-books = client.search_books("玄幻")
+usage = client.get_usage()  # 查看今日用量
 ```
 
 详细 API 文档见 [docs/api.md](docs/api.md)。

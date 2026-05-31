@@ -2,7 +2,7 @@
 import sys, os, json, argparse, time, webbrowser, subprocess
 from .api_client import QidianSaveClient
 from . import DATA_DIR
-from .qidian_client import search_books as qidian_search, get_bookshelf, load_cookies, set_cookie_path
+from .qidian_client import search_books as qidian_search, get_catalog as qidian_catalog, get_bookshelf, load_cookies, set_cookie_path
 from .adb_utils import (
     scan_device, pull_device_files, inspect_database, create_qd_zip,
     load_config, save_config, check_device, check_root, config_path,
@@ -92,8 +92,10 @@ def cmd_search(args):
         print(f"  {r['bookId']:<14} {r['bookName']:<20} {r['authorName']:<12}")
 
 def cmd_catalog(args):
-    client = _get_client(args)
-    cat = client.get_catalog(args.book_id)
+    cat = qidian_catalog(args.book_id)
+    if not cat:
+        print("获取目录失败，请检查 book_id")
+        return
     print(f"{cat.get('bookName', '')} — 共 {cat['totalChapters']} 章")
     for ch in cat["chapters"]:
         vip = "V" if ch["isVip"] else " "
