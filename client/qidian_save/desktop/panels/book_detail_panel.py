@@ -3,7 +3,7 @@ import threading, sys
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QTableWidget, QTableWidgetItem, QHeaderView, QFrame,
-    QMessageBox, QApplication,
+    QCheckBox, QMessageBox, QApplication,
 )
 from PyQt6.QtCore import Qt, QObject, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont
@@ -13,7 +13,7 @@ from ...qidian_client import get_catalog as qidian_catalog, load_cookies
 class _DetailSignal(QObject):
     catalog_ready = pyqtSignal(dict)
     catalog_error = pyqtSignal(str)
-    backup_done = pyqtSignal(int)
+    backup_done = pyqtSignal(int, bool)  # (task_id, is_server_crawl)
     backup_failed = pyqtSignal(str)
     backup_finished = pyqtSignal()
 
@@ -25,6 +25,7 @@ class BookDetailPanel(QWidget):
     def __init__(self, client, on_backup_started):
         super().__init__()
         self.client = client
+        # on_backup_started(task_id, server_crawl, book_id, qd_cookies)
         self.on_backup_started = on_backup_started
         self.book_id = ""
         self._sig = _DetailSignal()
@@ -113,6 +114,10 @@ class BookDetailPanel(QWidget):
         self.btn_select_all.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_select_all.clicked.connect(self._toggle_select_all)
         cr.addWidget(self.btn_select_all)
+
+        self.chk_server_crawl = QCheckBox("服务器抓取")
+        self.chk_server_crawl.setStyleSheet("font-size: 12px; color: #6b7280;")
+        cr.addWidget(self.chk_server_crawl)
 
         self.label_selected = QLabel("已选 0 章")
         self.label_selected.setStyleSheet("font-size: 13px; color: #6b7280;")
@@ -230,7 +235,6 @@ class BookDetailPanel(QWidget):
             QMessageBox.warning(self, "提示", "请先选择一本书")
             return
 
-        # 从勾选的章节计算起止范围
         checked_rows = []
         for i in range(self.table.rowCount()):
             ci = self.table.item(i, 0)
@@ -241,19 +245,34 @@ class BookDetailPanel(QWidget):
             QMessageBox.warning(self, "提示", "请先勾选要备份的章节")
             return
 
-        start = checked_rows[0] + 1      # 1-based
+        start = checked_rows[0] + 1
         end = checked_rows[-1] + 1
 
         self.btn_backup.setEnabled(False)
         self.btn_backup.setText("创建任务...")
 
+        server_crawl = self.chk_server_crawl.isChecked()
+
         def _do():
             try:
                 qd_cookies = load_cookies()
-                result = self.client.start_backup(self.book_id, start, end,
-                                                  qidian_cookies=qd_cookies)
-                task_id = result["taskId"]
-                self._sig.backup_done.emit(task_id)
+                if server_crawl:
+                    # 旧流程：服务端全包
+                    result = self.client.start_backup(self.book_id, start, end,
+                                                      qidian_cookies=qd_cookies)
+                    task_id = result["taskId"]
+                else:
+                    # 新流程：先上传 Cookie 再创建任务
+                    cookies_ref = ""
+                    try:
+                        cr = self.client.upload_qidian_cookies(qd_cookies)
+                        cookies_ref = cr.get("cookiesRef", "")
+                    except Exception:
+                        pass
+                    result = self.client.start_backup(self.book_id, start, end,
+                                                      cookies_ref=cookies_ref)
+                    task_id = result["taskId"]
+                self._sig.backup_done.emit(task_id, server_crawl)
             except Exception as e:
                 print(f"[detail] 备份创建异常: {e}", file=sys.stderr)
                 self._sig.backup_failed.emit(str(e))
@@ -266,5 +285,6 @@ class BookDetailPanel(QWidget):
         self.btn_backup.setEnabled(True)
         self.btn_backup.setText("  开始备份")
 
-    def _on_backup_done(self, task_id: int):
-        self.on_backup_started(task_id)
+    def _on_backup_done(self, task_id: int, server_crawl: bool):
+        qd_cookies = load_cookies()
+        self.on_backup_started(task_id, server_crawl, self.book_id, qd_cookies)
