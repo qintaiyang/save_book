@@ -120,6 +120,6 @@ usage = client.get_usage()  # 查看今日用量 / check daily usage
 announcements = client.get_announcements()  # 获取公告 / fetch announcements
 ```
 
-详细 API 文档见 [docs/api.md](docs/api.md)。
+服务端 API 文档（Swagger UI）：[https://autohelp.asia/docs](https://autohelp.asia/docs)
 
-Full API documentation at [docs/api.md](docs/api.md).
+Server API docs (Swagger UI): [https://autohelp.asia/docs](https://autohelp.asia/docs)
