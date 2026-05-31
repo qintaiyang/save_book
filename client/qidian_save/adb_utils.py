@@ -15,9 +15,13 @@ PROJECT_DIR = Path(__file__).resolve().parent.parent
 def _find_adb() -> str:
     """查找可用的 adb 可执行文件路径
 
-    优先使用项目捆绑的 adb，找不到则回退到系统 PATH。
+    优先使用项目捆绑的 adb（支持 PyInstaller 打包后的路径），
+    找不到则回退到系统 PATH。
     """
-    bundled = PROJECT_DIR / "adb"
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        bundled = Path(sys._MEIPASS) / "adb"
+    else:
+        bundled = PROJECT_DIR / "adb"
     for exe in ["adb.exe", "adb"]:
         p = bundled / exe
         if p.exists():
