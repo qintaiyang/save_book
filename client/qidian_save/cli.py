@@ -1,5 +1,5 @@
 """CLI — 纯 API 调用 + ADB 工具（ADB 需本地设备）"""
-import sys, os, json, argparse, time, webbrowser, subprocess
+import sys, os, json, argparse, time, webbrowser, subprocess, io, zipfile
 from .api_client import QidianSaveClient
 from . import DATA_DIR
 from .qidian_client import search_books as qidian_search, get_catalog as qidian_catalog, get_bookshelf, load_cookies, set_cookie_path
@@ -102,7 +102,162 @@ def cmd_catalog(args):
         buy = "✓" if ch["isBuy"] else " "
         print(f"  {vip}{buy} {ch['chapterId']:<12} {ch['chapterName']}")
 
+def _cmd_backup_local_crawl(args):
+    """新流程：客户端本地爬取原始数据 → zip → 上传服务端解码 → 下载结果"""
+    from .qidian_client import get_catalog as qidian_catalog, load_cookies, set_cookie_path, get_chapter_data
+
+    client = _get_client(args)
+
+    # 1. Cookie 准备
+    cookies_ref = ""
+    if args.cookies_ref:
+        cookies_ref = args.cookies_ref
+        print(f"使用指定 cookies_ref: {cookies_ref}")
+    else:
+        if args.cookie_file:
+            set_cookie_path(args.cookie_file)
+        else:
+            set_cookie_path()
+        local_cookies = load_cookies()
+        if local_cookies and local_cookies.get("ywguid"):
+            print(f"检测到本地起点 Cookie (ywguid={local_cookies['ywguid']}), 上传到服务端...")
+            try:
+                result = client.upload_qidian_cookies(local_cookies)
+                cookies_ref = result.get("cookiesRef", "")
+                print(f"Cookie 上传成功, ref={cookies_ref}")
+            except Exception as e:
+                print(f"Cookie 上传失败: {e}")
+                print("仍将尝试备份（可能只能下载免费章节）")
+        else:
+            print("未检测到起点登录 Cookie。请先扫码登录:")
+            print("  方式 1: python -m qidian_save desktop")
+            print("  方式 2: 直接指定 cookies-ref: --cookies-ref <ref>")
+
+    # 2. 创建服务端任务
+    try:
+        task = client.start_backup(args.book_id, args.start, args.end, cookies_ref)
+    except Exception as e:
+        print(f"创建任务失败: {e}")
+        return
+    task_id = task["taskId"]
+    print(f"任务已创建: {task_id}")
+
+    # 3. 本地获取目录
+    qd_cookies = load_cookies()
+    if not qd_cookies.get("ywguid"):
+        print("未检测到本地起点 Cookie，无法开始爬取")
+        return
+
+    print("正在获取目录...")
+    cat = qidian_catalog(args.book_id, cookies=qd_cookies)
+    if not cat or not cat.get("chapters"):
+        print("获取目录失败，请检查 book_id 和 Cookie 有效性")
+        return
+
+    chapters = cat["chapters"]
+    total = len(chapters)
+    end_idx = min(args.end or total, total)
+    start_idx = max(1, args.start) - 1
+    target = chapters[start_idx:end_idx]
+    BATCH = args.batch_size
+    DELAY = args.delay
+
+    # 4. 输出目录
+    book_name = cat.get('bookName', f'book_{args.book_id}')
+    output_dir = args.output or str(DATA_DIR / f"{book_name}_{args.book_id}")
+    os.makedirs(output_dir, exist_ok=True)
+
+    print(f"目标: {len(target)} 章, 每批 {BATCH} 章, 间隔 {DELAY}s")
+    print(f"输出: {output_dir}")
+    print()
+
+    cookies_json = json.dumps(qd_cookies, ensure_ascii=False)
+    all_ok = True
+
+    for batch_idx in range(0, len(target), BATCH):
+        batch = target[batch_idx:batch_idx + BATCH]
+        batch_num = batch_idx // BATCH + 1
+        total_batches = (len(target) + BATCH - 1) // BATCH
+        print(f"\n── 第 {batch_num}/{total_batches} 批 ({len(batch)} 章) ──")
+
+        # 4a. 下载原始数据
+        raw_data = []
+        for i, ch in enumerate(batch):
+            cid = ch["chapterId"]
+            cname = ch.get("chapterName", cid)
+            sys.stdout.write(f"  下载 [{i+1}/{len(batch)}] {cname[:30]}... ")
+            sys.stdout.flush()
+            data = get_chapter_data(args.book_id, cid, qd_cookies)
+            if data:
+                raw_data.append(data)
+                sys.stdout.write("OK\n")
+            else:
+                buy_status = "已购" if (not ch.get("isVip") or ch.get("isBuy")) else "未购"
+                sys.stdout.write(f"SKIP ({buy_status})\n")
+
+            if i < len(batch) - 1:
+                time.sleep(DELAY)
+
+        if not raw_data:
+            print("  [!] 本批无有效数据，跳过")
+            continue
+
+        # 4b. 打包 zip
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for rd in raw_data:
+                zf.writestr(f"{rd['chapterId']}.json", json.dumps(rd, ensure_ascii=False))
+        zip_bytes = zip_buf.getvalue()
+        print(f"  打包: {len(raw_data)} 章, {len(zip_bytes)/1024:.0f} KB")
+
+        # 4c. 上传解码
+        print(f"  上传解码中...")
+        try:
+            result_zip = client.decode_chapter_zip(task_id, zip_bytes, cookies_json)
+        except Exception as e:
+            print(f"  [!!] 解码失败: {e}")
+            all_ok = False
+            continue
+
+        # 4d. 解压保存
+        error_chapters = []
+        try:
+            with zipfile.ZipFile(io.BytesIO(result_zip)) as zf:
+                for name in zf.namelist():
+                    if name == "_errors.json":
+                        errors_data = json.loads(zf.read(name))
+                        error_chapters = errors_data if isinstance(errors_data, list) else []
+                        continue
+                    target_path = os.path.join(output_dir, name)
+                    os.makedirs(os.path.dirname(target_path) or ".", exist_ok=True)
+                    zf.extract(name, output_dir)
+                print(f"  保存: {len(raw_data)} 章 ({len(error_chapters)} 章失败)")
+                for ec in error_chapters:
+                    print(f"    [!!] {ec}")
+        except Exception as e:
+            print(f"  解压失败: {e}")
+            all_ok = False
+
+    # 5. 清理
+    try:
+        client.cleanup_task(task_id)
+        print(f"\n任务 {task_id} 已清理")
+    except Exception as e:
+        print(f"\n清理失败: {e}")
+
+    print(f"\n{'完成' if all_ok else '警告'}! 结果保存到: {output_dir}")
+
+
 def cmd_backup(args):
+    """备份书籍 — 默认客户端爬取，--server-crawl 使用服务端全包"""
+    if args.server_crawl:
+        return _cmd_backup_server_crawl(args)
+    else:
+        return _cmd_backup_local_crawl(args)
+
+
+def _cmd_backup_server_crawl(args):
+    """旧流程：服务端全包爬取+解密"""
     client = _get_client(args)
 
     # 1. 尝试获取本地起点 Cookie 并上传到服务端
@@ -468,12 +623,18 @@ def build_parser():
     p_bookshelf = sub.add_parser("bookshelf", help="查看起点书架")
     p_bookshelf.set_defaults(func=cmd_bookshelf)
 
-    p_backup = sub.add_parser("backup", help="备份书籍（需先起点扫码登录）")
+    p_backup = sub.add_parser("backup", help="备份书籍（默认客户端爬取，--server-crawl 用服务端全包）")
     p_backup.add_argument("book_id")
     p_backup.add_argument("--start", type=int, default=1)
     p_backup.add_argument("--end", type=int, default=0)
     p_backup.add_argument("--output", "-o")
     p_backup.add_argument("--cookies-ref", help="已上传的起点 Cookie ref（跳过本地 Cookie 检测）")
+    p_backup.add_argument("--server-crawl", action="store_true",
+                          help="使用旧流程：服务端全包爬取+解密")
+    p_backup.add_argument("--batch-size", type=int, default=50,
+                          help="每批处理章节数（默认 50，仅客户端抓取模式）")
+    p_backup.add_argument("--delay", type=float, default=1.5,
+                          help="每章请求间隔秒数（默认 1.5，仅客户端抓取模式）")
     p_backup.set_defaults(func=cmd_backup)
 
     p_dec = sub.add_parser("decrypt", help="解密 .qd 文件（单文件或整个目录）")
