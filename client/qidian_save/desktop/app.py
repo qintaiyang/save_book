@@ -158,9 +158,10 @@ class MainWindow(FluentWindow):
         # 程序跳转到详情面板（不在导航中高亮）
         self.switchTo(self.panels["detail"])
 
-    def _on_backup_started(self, task_id: int):
+    def _on_backup_started(self, task_id: int, server_crawl: bool = True,
+                           book_id: str = "", qd_cookies: dict = None):
         self.current_task_id = task_id
-        self.panels["backup"].load_task(task_id)
+        self.panels["backup"].load_task(task_id, server_crawl, book_id, qd_cookies)
         self.switchTo(self.panels["backup"])
 
     # ── 主题 ───────────────────────────────────────────────

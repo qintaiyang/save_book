@@ -1,5 +1,5 @@
 """在线备份面板 — 任务进度 + 章节列表 + 下载"""
-import os, threading, time
+import io, json, os, threading, time, zipfile
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QTableWidget, QTableWidgetItem, QHeaderView, QFrame,
@@ -17,6 +17,14 @@ class _DownloadSignals(QObject):
     error = pyqtSignal(str)           # 单个章节下载出错
 
 
+class _CrawlSignals(QObject):
+    """本地爬取线程 → UI 主线程的信号"""
+    progress = pyqtSignal(int, int, str)  # (当前, 总数, 状态文字)
+    batch_done = pyqtSignal(int, str)     # (当前批完成数, 信息)
+    finished = pyqtSignal(int, int)       # (成功数, 失败数)
+    error = pyqtSignal(str)
+
+
 class BackupPanel(QWidget):
     def __init__(self, client):
         super().__init__()
@@ -24,10 +32,18 @@ class BackupPanel(QWidget):
         self.task_id = 0
         self.task_info = {}
         self._polling = False
+        self._server_crawl = True   # default to old flow
+        self._book_id = ""
+        self._qd_cookies = {}
         self._download_sig = _DownloadSignals()
         self._download_sig.progress.connect(self._on_dl_progress)
         self._download_sig.finished.connect(self._on_dl_finished)
         self._download_sig.error.connect(self._on_dl_error)
+        self._crawl_sig = _CrawlSignals()
+        self._crawl_sig.progress.connect(self._on_crawl_progress)
+        self._crawl_sig.batch_done.connect(self._on_crawl_batch_done)
+        self._crawl_sig.finished.connect(self._on_crawl_finished)
+        self._crawl_sig.error.connect(self._on_crawl_error)
         self._init_ui()
 
     def _init_ui(self):
@@ -142,9 +158,17 @@ class BackupPanel(QWidget):
         cr.addStretch()
         layout.addWidget(controls)
 
-    def load_task(self, task_id: int):
+    def load_task(self, task_id: int, server_crawl: bool = True,
+                  book_id: str = "", qd_cookies: dict = None):
         self.task_id = task_id
-        self._start_polling()
+        self._server_crawl = server_crawl
+        self._book_id = book_id
+        self._qd_cookies = qd_cookies or {}
+        self.table.setRowCount(0)
+        if server_crawl:
+            self._start_polling()
+        else:
+            self._start_local_crawl()
 
     def _start_polling(self):
         if self._polling:
@@ -173,6 +197,95 @@ class BackupPanel(QWidget):
 
         except Exception as e:
             self.label_status.setText(f"查询失败: {str(e)}")
+
+    def _start_local_crawl(self):
+        """启动本地爬取线程"""
+        self.label_book.setText(f"正在本地爬取... (任务 #{self.task_id})")
+        self.label_status.setText("准备中...")
+
+        def _do():
+            from ...qidian_client import get_catalog as qidian_catalog, get_chapter_data
+            BATCH = 50
+            DELAY = 1.5
+
+            try:
+                cat = qidian_catalog(self._book_id, cookies=self._qd_cookies)
+                if not cat or not cat.get("chapters"):
+                    self._crawl_sig.error.emit("获取目录失败")
+                    return
+
+                chapters = cat["chapters"]
+                target = chapters
+                success = 0
+                failed = 0
+
+                cookies_json = json.dumps(self._qd_cookies, ensure_ascii=False)
+
+                for batch_idx in range(0, len(target), BATCH):
+                    batch = target[batch_idx:batch_idx + BATCH]
+
+                    raw_data = []
+                    for i, ch in enumerate(batch):
+                        cid = ch["chapterId"]
+                        cname = ch.get("chapterName", cid)[:30]
+                        msg = f"下载 {batch_idx + i + 1}/{len(target)}: {cname}"
+                        self._crawl_sig.progress.emit(batch_idx + i, len(target), msg)
+                        data = get_chapter_data(self._book_id, cid, self._qd_cookies)
+                        if data:
+                            raw_data.append(data)
+                        if i < len(batch) - 1:
+                            time.sleep(DELAY)
+
+                    if not raw_data:
+                        continue
+
+                    # 打包
+                    zip_buf = io.BytesIO()
+                    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                        for rd in raw_data:
+                            zf.writestr(f"{rd['chapterId']}.json",
+                                        json.dumps(rd, ensure_ascii=False))
+
+                    # 上传解码
+                    try:
+                        result_zip = self.client.decode_chapter_zip(
+                            self.task_id, zip_buf.getvalue(), cookies_json
+                        )
+                    except Exception as e:
+                        self._crawl_sig.batch_done.emit(0, f"解码失败: {e}")
+                        failed += len(raw_data)
+                        continue
+
+                    # 解压保存
+                    book_name = cat.get('bookName', f'book_{self._book_id}')
+                    output_dir = str(DATA_DIR / f"{book_name}_{self._book_id}")
+                    os.makedirs(output_dir, exist_ok=True)
+
+                    try:
+                        with zipfile.ZipFile(io.BytesIO(result_zip)) as zf:
+                            for name in zf.namelist():
+                                if name == "_errors.json":
+                                    errs = json.loads(zf.read(name))
+                                    failed += len(errs) if isinstance(errs, list) else 0
+                                    continue
+                                zf.extract(name, output_dir)
+                            batch_ok = len(raw_data)
+                    except Exception:
+                        batch_ok = 0
+                        failed += len(raw_data)
+
+                    success += batch_ok
+                    self._crawl_sig.batch_done.emit(
+                        batch_ok, f"批 {batch_idx//BATCH + 1} 完成 ({len(raw_data)} 章)"
+                    )
+
+                self._crawl_sig.finished.emit(success, failed)
+
+            except Exception as e:
+                self._crawl_sig.error.emit(str(e))
+
+        import threading
+        threading.Thread(target=_do, daemon=True).start()
 
     def _download_all(self):
         if not self.task_id:
@@ -259,6 +372,28 @@ class BackupPanel(QWidget):
             self.label_dl_progress.setText(f"❌ 全部失败 ({failed} 章)")
         else:
             self.label_dl_progress.setText("")
+
+    def _on_crawl_progress(self, current: int, total: int, msg: str):
+        self.label_status.setText(msg)
+        self.label_progress_text.setText(f"{current} / {total}")
+        self.progress.setMaximum(total)
+        self.progress.setValue(current)
+
+    def _on_crawl_batch_done(self, count: int, info: str):
+        self.label_dl_progress.setText(info)
+
+    def _on_crawl_error(self, msg: str):
+        self.label_status.setText(f"爬取失败: {msg}")
+
+    def _on_crawl_finished(self, success: int, failed: int):
+        if failed == 0 and success > 0:
+            self.label_status.setText(f"全部完成 ({success} 章)")
+        elif failed > 0 and success > 0:
+            self.label_status.setText(f"完成 {success} 章, {failed} 章失败")
+        elif failed > 0:
+            self.label_status.setText(f"全部失败 ({failed} 章)")
+        else:
+            self.label_status.setText("无章节可处理")
 
     def _cleanup(self):
         if not self.task_id:
