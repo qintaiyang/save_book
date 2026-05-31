@@ -121,6 +121,45 @@ Response: Content-Type: text/html
           <!DOCTYPE html><html>...（浏览器直接渲染）
 ```
 
+### 上传原始章节数据解码（客户端抓取模式）
+
+```
+POST /api/backup/{taskId}/decode-zip
+Header: Authorization: Bearer <token>
+Content-Type: multipart/form-data
+
+file: @chapters.zip
+cookies: '{"ywguid":"...","ywkey":"..."}'
+```
+
+输入 zip 格式：每章一个 `{chapterId}.json` 文件，内容为 `get_chapter_data` 的原始返回：
+
+```json
+{
+  "chapterId": "907545099",
+  "chapterName": "第四百三十三章",
+  "cES": 2,
+  "content": "base64_encrypted_content...",
+  "css": ".p1 y1{order:3}.p1 y2::after{content:'x'}...",
+  "randomFont": "{\"data\":[0,1,2,...]}",
+  "fkp": "base64_fkp_string..."
+}
+```
+
+输出 zip 格式：每章 `{chapterId}.txt` + `{chapterId}.html` + `_errors.json`（全部成功时无 `_errors.json`）。
+
+`cookies` 为 Form 字段（字符串），内容是 JSON 序列化的 cookies dict。需要包含 `ywguid` 和 `ywkey`（Fock 解密必需），建议同时包含 `alk`/`alkts` 以便服务端自动续期。
+
+| HTTP 状态码 | 说明 |
+|-------------|------|
+| 200 | 成功，返回 application/zip |
+| 400 | zip 格式错误 / 内容为空 / cookies 无效 |
+| 404 | 任务不存在 |
+| 413 | 文件过大（超过 100MB） |
+| 429 | 今日额度不足 |
+
+> 此端点用于**客户端抓取模式**：客户端从起点 AJAX API 下载原始加密章节数据，打包为 zip 上传，服务端只做解码运算（CSS/Fock/字体处理）。详见 `/docs/jiemi`。
+
 HTML 内容说明：
 - **带 CSS 混淆的章节**（大部分付费章节）：含 YWQD 字体修正 JS + 内嵌字体 base64（约 470KB），浏览器打开即可正确渲染
 - **纯文本章节**（无混淆）：简约 HTML（system-ui 字体，约 5KB）
