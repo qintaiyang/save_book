@@ -1,16 +1,41 @@
 [project]
 name = "qidian-save"
 version = "0.1.0"
-description = "起点中文网书籍本地保存工具"
+description = "起点中文网书籍本地保存工具 — A local backup tool for Qidian Chinese novels"
 requires-python = ">=3.9"
+authors = [
+    {name = "qintaiyang"},
+]
+license = {file = "LICENSE"}
+readme = "README.md"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Utilities",
+]
 dependencies = [
     "requests>=2.28",
     "PyQt6>=6.5",
     "PyQt6-Fluent-Widgets>=1.11",
 ]
 
+[project.urls]
+Homepage = "https://autohelp.asia"
+Source = "https://github.com/qintaiyang/save_book"
+Documentation = "https://autohelp.asia/docs"
+
 [project.scripts]
 qidian-save = "qidian_save.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["qidian_save", "qidian_save.*"]
+
+[tool.setuptools.package-data]
+qidian_save = ["desktop/style/*.qss"]
