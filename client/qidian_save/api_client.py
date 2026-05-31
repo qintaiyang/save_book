@@ -133,6 +133,29 @@ class QidianSaveClient:
             return resp.text
         return resp.json()
 
+    def decode_chapter_zip(self, task_id: int, zip_data: bytes, cookies_str: str) -> bytes:
+        """上传原始章节数据 zip，服务端解码后返回结果 zip
+
+        Args:
+            task_id: 备份任务 ID
+            zip_data: 打包好的 zip 二进制数据（含 {chapterId}.json）
+            cookies_str: JSON 序列化的 cookies 字符串
+
+        Returns:
+            解码结果的 zip 二进制数据
+
+        Raises:
+            ApiError: HTTP 400/404/413/429
+        """
+        resp = self.session.post(
+            f"{self.base_url}/api/backup/{task_id}/decode-zip",
+            files={"file": (f"chapters_{task_id}.zip", zip_data, "application/zip")},
+            data={"cookies": cookies_str},
+            timeout=300,
+        )
+        self._raise_on_error(resp)
+        return resp.content
+
     def cleanup_task(self, task_id: int) -> dict:
         return self._delete(f"/api/backup/{task_id}")
 
