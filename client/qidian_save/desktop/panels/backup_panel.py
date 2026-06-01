@@ -26,6 +26,12 @@ class _CrawlSignals(QObject):
     error = pyqtSignal(str)
 
 
+class _PollSignals(QObject):
+    """轮询线程 → UI 主线程的信号"""
+    status_ready = pyqtSignal(dict)
+    error = pyqtSignal(str)
+
+
 class BackupPanel(QWidget):
     def __init__(self, client):
         super().__init__()
@@ -45,6 +51,10 @@ class BackupPanel(QWidget):
         self._crawl_sig.batch_done.connect(self._on_crawl_batch_done)
         self._crawl_sig.finished.connect(self._on_crawl_finished)
         self._crawl_sig.error.connect(self._on_crawl_error)
+        self._poll_sig = _PollSignals()
+        self._poll_sig.status_ready.connect(self._on_poll_status)
+        self._poll_sig.error.connect(self._on_poll_error)
+        self._poll_in_flight = False
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll_task)
         self._init_ui()
@@ -164,6 +174,9 @@ class BackupPanel(QWidget):
     def load_task(self, task_id: int, server_crawl: bool = True,
                   book_id: str = "", qd_cookies: dict = None,
                   start: int = 1, end: int = 0):
+        self._polling = False
+        self._poll_timer.stop()
+        self._poll_in_flight = False
         self.task_id = task_id
         self._server_crawl = server_crawl
         self._book_id = book_id
@@ -173,7 +186,6 @@ class BackupPanel(QWidget):
         self._crawling = False
         self.table.setRowCount(0)
         if server_crawl:
-            self._polling = False  # reset in case a previous task was still polling
             self._start_polling()
         else:
             self._start_local_crawl()
@@ -186,27 +198,42 @@ class BackupPanel(QWidget):
         self._poll_timer.start(3000)
 
     def _poll_task(self):
-        if not self.task_id:
+        if not self.task_id or not self._polling or self._poll_in_flight:
             return
-        try:
-            status = self.client.get_task(self.task_id)
-            self.task_info = status
-            total = status["totalChapters"]
-            completed = status["completedChapters"]
-            failed = status["failedChapters"]
 
-            self.label_book.setText(f"{status.get('bookName', '')} ({status.get('bookId', '')})")
-            self.label_status.setText(f"状态: {status['status']}  完成: {completed}  失败: {failed}")
-            self.label_progress_text.setText(f"{completed} / {total}")
-            self.progress.setMaximum(total)
-            self.progress.setValue(completed)
+        task_id = self.task_id
+        self._poll_in_flight = True
 
-            if status["status"] in ("completed", "failed"):
-                self._polling = False
-                self._poll_timer.stop()
+        def _run():
+            try:
+                status = self.client.get_task(task_id)
+            except Exception as e:
+                self._poll_sig.error.emit(str(e))
+                return
+            self._poll_sig.status_ready.emit(status)
 
-        except Exception as e:
-            self.label_status.setText(f"查询失败: {str(e)}")
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _on_poll_status(self, status: dict):
+        self._poll_in_flight = False
+        self.task_info = status
+        total = status["totalChapters"]
+        completed = status["completedChapters"]
+        failed = status["failedChapters"]
+
+        self.label_book.setText(f"{status.get('bookName', '')} ({status.get('bookId', '')})")
+        self.label_status.setText(f"状态: {status['status']}  完成: {completed}  失败: {failed}")
+        self.label_progress_text.setText(f"{completed} / {total}")
+        self.progress.setMaximum(total)
+        self.progress.setValue(completed)
+
+        if status["status"] in ("completed", "failed"):
+            self._polling = False
+            self._poll_timer.stop()
+
+    def _on_poll_error(self, msg: str):
+        self._poll_in_flight = False
+        self.label_status.setText(f"查询失败: {msg}")
 
     def _start_local_crawl(self):
         """启动本地爬取线程"""
