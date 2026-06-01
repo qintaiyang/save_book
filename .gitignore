@@ -40,3 +40,7 @@ client/adb/extra/
 
 # APK files
 *.apk
+
+# Generated artifacts
+client/dist-exe/
+*.zip
