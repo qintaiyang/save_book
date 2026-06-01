@@ -262,7 +262,6 @@ pyinstaller client/qidian-save.spec    # 输出: dist-exe/qidian-save/
 | QIMEI36 未找到 | 至少启动一次 QDReader（beacon DB 需要事件） |
 | root 不可用 | 模拟器有 root；真机需要 root 权限 |
 | QR 登录卡住 | 重新发起扫码 |
-| 服务端 QR 返回 502 | GFW 封锁 ptlogin.yuewen.com — 服务端需配置代理 |
 | MSYS2 路径乱码 | `subprocess.run` 始终使用 list-form 参数 |
 
 ---
