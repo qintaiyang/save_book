@@ -18,6 +18,7 @@ class _DecryptSignal(QObject):
     error = pyqtSignal(str)
     book_list_ready = pyqtSignal(list)
     decrypt_done = pyqtSignal(str)
+    params_ready = pyqtSignal(str, str, str)
     # capture_status 已废弃，由 extract_params() 替代
 
 
@@ -30,6 +31,7 @@ class QDDecryptPanel(QWidget):
         self._sig.error.connect(lambda e: self._append_log(f"❌ {e}"))
         self._sig.book_list_ready.connect(self._show_books)
         self._sig.decrypt_done.connect(self._on_decrypt_done)
+        self._sig.params_ready.connect(self._fill_params)
         self._qd_dir = ""           # 拉取到的 qd_files 目录
         self._current_book_id = ""  # 当前选中的书籍 ID
         self._current_book_dir = "" # 当前选中的书籍目录
@@ -290,14 +292,8 @@ class QDDecryptPanel(QWidget):
                         cfg["pool_b64"] = pool_b64
                     save_config(cfg)
 
-                    # 回填 UI（用默认参数捕获当前值，避免闭包延迟绑定）
-                    from PyQt6.QtCore import QTimer
-                    if qimei36:
-                        QTimer.singleShot(0, lambda v=qimei36: self.input_qimei.setText(v))
-                    if user_id:
-                        QTimer.singleShot(0, lambda v=user_id: self.input_userid.setText(v))
-                    if pool_b64:
-                        QTimer.singleShot(0, lambda v=pool_b64: self.input_pool.setText(v))
+                    # 回填 UI（通过信号桥安全更新主线程）
+                    self._sig.params_ready.emit(qimei36, user_id, pool_b64)
 
                 self._sig.log.emit(f"🛠️ root 提取完成: {', '.join(collected)}")
             except Exception as e:
@@ -689,6 +685,14 @@ class QDDecryptPanel(QWidget):
         d = self._qd_dir or str(Path(__file__).resolve().parent.parent.parent.parent / "qd_files")
         os.makedirs(d, exist_ok=True)
         os.startfile(d)
+
+    def _fill_params(self, qimei36: str, user_id: str, pool_b64: str):
+        if qimei36:
+            self.input_qimei.setText(qimei36)
+        if user_id:
+            self.input_userid.setText(user_id)
+        if pool_b64:
+            self.input_pool.setText(pool_b64)
 
     def _append_log(self, text: str):
         self.log_output.append(text)

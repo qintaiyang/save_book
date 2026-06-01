@@ -1,10 +1,10 @@
 """qidian_save 桌面主应用 — FluentWindow 重构版"""
-import sys, os
+import sys, os, threading
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QLabel, QHBoxLayout,
     QDialog, QPushButton,
 )
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QObject, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont
 
 from ..api_client import QidianSaveClient
@@ -100,6 +100,10 @@ class PageWidget(QWidget):
         self._inner = widget
 
 
+class _MainSignals(QObject):
+    usage_ready = pyqtSignal(dict)
+
+
 # ── 主窗口 ────────────────────────────────────────────────
 
 class MainWindow(FluentWindow):
@@ -109,6 +113,8 @@ class MainWindow(FluentWindow):
         self.token = token
         self.current_task_id = None
         self._current_theme = Theme.LIGHT
+        self._sig = _MainSignals()
+        self._sig.usage_ready.connect(self._on_usage_ready)
         self._setup_panels()
         self._setup_theme()
         self._setup_status_bar()
@@ -223,11 +229,18 @@ class MainWindow(FluentWindow):
     def _update_usage(self):
         if not self.token:
             return
-        try:
-            usage = self.client.get_usage()
-            self.usage_indicator.setText(f"今日 {usage['chaptersUsed']} / {usage['limit']} 次")
-        except Exception:
-            pass
+
+        def _run():
+            try:
+                usage = self.client.get_usage()
+            except Exception:
+                return
+            self._sig.usage_ready.emit(usage)
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _on_usage_ready(self, usage: dict):
+        self.usage_indicator.setText(f"今日 {usage['chaptersUsed']} / {usage['limit']} 次")
 
 
 def main():

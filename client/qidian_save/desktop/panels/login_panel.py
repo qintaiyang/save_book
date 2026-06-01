@@ -13,6 +13,7 @@ class _LoginSignal(QObject):
     poll_result = pyqtSignal(dict)
     login_error = pyqtSignal(str)
     login_success = pyqtSignal(str)
+    status_update = pyqtSignal(str, bool)
 
 
 class LoginPanel(QWidget):
@@ -25,6 +26,7 @@ class LoginPanel(QWidget):
         self._sig.poll_result.connect(self._on_poll_result)
         self._sig.login_error.connect(lambda e: self._set_status(f"登录失败: {e}", error=True))
         self._sig.login_success.connect(self._on_login_success)
+        self._sig.status_update.connect(self._set_status)
         self._device_code = ""
         self._polling = False
         self._init_ui()
@@ -172,15 +174,15 @@ class LoginPanel(QWidget):
                     elif status == "slow_down":
                         interval = result.get("interval", interval + 5)
                     elif status == "expired":
-                        self._set_status("登录已过期，请重新点击登录", error=True)
+                        self._sig.status_update.emit("登录已过期，请重新点击登录", True)
                         self._polling = False
                         return
                     elif status == "denied":
-                        self._set_status("用户取消了授权", error=True)
+                        self._sig.status_update.emit("用户取消了授权", True)
                         self._polling = False
                         return
                     elif status == "pending":
-                        self._set_status("等待扫码中...")
+                        self._sig.status_update.emit("等待扫码中...", False)
                 except Exception as e:
                     if self._polling:
                         self._sig.login_error.emit(str(e))

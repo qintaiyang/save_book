@@ -20,6 +20,7 @@ class _QRSignal(QObject):
     poll_result = pyqtSignal(dict)
     poll_error = pyqtSignal(str)
     poll_timeout = pyqtSignal()
+    announcements_ready = pyqtSignal(list)
 
 
 _PRIORITY_LABEL = {"urgent": "【紧急】", "important": "【重要】", "normal": ""}
@@ -32,10 +33,11 @@ class QidianLoginPanel(QWidget):
         self.session_key = ""
         self._polling = False
         self._sig = _QRSignal()
+        self._sig.announcements_ready.connect(self._on_announcements_ready)
         self._connect_signals()
         self._init_ui()
         # 延迟拉取公告（避免构造函数阻塞，服务器不可达时不卡 UI）
-        QTimer.singleShot(0, self._refresh_announcements)
+        self._refresh_announcements()
 
     def _connect_signals(self):
         self._sig.show_qr.connect(self._on_show_qr)
@@ -103,14 +105,17 @@ class QidianLoginPanel(QWidget):
 
     def _refresh_announcements(self):
         """拉取公告，显示在二维码区域（点击生成二维码后被二维码替换）"""
-        try:
-            items = self.client.get_announcements()
-        except Exception:
-            return
+        def _run():
+            try:
+                items = self.client.get_announcements()
+            except Exception:
+                return
+            self._sig.announcements_ready.emit(items or [])
+        threading.Thread(target=_run, daemon=True).start()
 
+    def _on_announcements_ready(self, items: list):
         if not items:
             return
-
         lines = ["📢 公告"]
         for a in items:
             prefix = _PRIORITY_LABEL.get(a.get("priority", ""), "")
