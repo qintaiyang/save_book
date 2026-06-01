@@ -1,7 +1,9 @@
 """CLI — 纯 API 调用 + ADB 工具（ADB 需本地设备）"""
 import sys, os, json, argparse, time, webbrowser, subprocess, io, zipfile
+from pathlib import Path
 from .api_client import QidianSaveClient
 from . import DATA_DIR
+from .zip_utils import safe_extract_zip
 from .qidian_client import search_books as qidian_search, get_catalog as qidian_catalog, get_bookshelf, load_cookies, set_cookie_path
 from .adb_utils import (
     scan_device, pull_device_files, inspect_database, create_qd_zip,
@@ -227,10 +229,9 @@ def _cmd_backup_local_crawl(args):
                     if name == "_errors.json":
                         errors_data = json.loads(zf.read(name))
                         error_chapters = errors_data if isinstance(errors_data, list) else []
-                        continue
-                    target_path = os.path.join(output_dir, name)
-                    os.makedirs(os.path.dirname(target_path) or ".", exist_ok=True)
-                    zf.extract(name, output_dir)
+                content_names = [n for n in zf.namelist() if n != "_errors.json"]
+                if content_names:
+                    safe_extract_zip(zf, output_dir)
                 print(f"  保存: {len(raw_data)} 章 ({len(error_chapters)} 章失败)")
                 for ec in error_chapters:
                     print(f"    [!!] {ec}")
@@ -365,7 +366,7 @@ def cmd_decrypt(args):
         import zipfile
         extract_dir = input_path.parent / f"{input_path.name}_decrypted"
         with zipfile.ZipFile(result_zip, "r") as zf:
-            zf.extractall(str(extract_dir))
+            safe_extract_zip(zf, extract_dir)
         print(f"解密完成！{len(list(extract_dir.iterdir()))} 个文件已保存到: {extract_dir}")
     else:
         # 单文件模式：上传单个 .qd 文件
@@ -465,6 +466,8 @@ def _resolve_device(serial: str | None) -> str | None:
 def cmd_adb_scan(args):
     """扫描 Android 设备上的 .qd 文件"""
     serial = _resolve_device(args.device)
+    if serial is None and len(list_devices()) > 1:
+        return
     print("=== ADB 扫描设备 ===")
     if not check_device():
         print("[!!] 未检测到 Android 设备，请连接 USB 并开启调试")
@@ -492,6 +495,8 @@ def cmd_adb_scan(args):
 def cmd_adb_pull(args):
     """从 Android 设备拉取 .qd 文件和数据库"""
     serial = _resolve_device(args.device)
+    if serial is None and len(list_devices()) > 1:
+        return
     output = args.output or os.path.join(
         os.path.dirname(__file__), "..", "qd_files"
     )
@@ -511,6 +516,8 @@ def cmd_adb_pull(args):
 def cmd_adb_extract(args):
     """从已 root 的 Android 设备直接提取解密参数（真机/模拟器均可用）"""
     serial = _resolve_device(args.device)
+    if serial is None and len(list_devices()) > 1:
+        return
     print("=== ADB 参数提取 ===")
     if not check_device():
         print("[!!] 未检测到 Android 设备")
