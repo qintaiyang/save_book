@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QObject, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont
 from ... import DATA_DIR
+from ...zip_utils import safe_extract_zip
 
 
 class _DownloadSignals(QObject):
@@ -282,8 +283,7 @@ class BackupPanel(QWidget):
                                 if name == "_errors.json":
                                     errs = json.loads(zf.read(name))
                                     failed += len(errs) if isinstance(errs, list) else 0
-                                    continue
-                                zf.extract(name, output_dir)
+                            safe_extract_zip(zf, output_dir)
                             batch_ok = len(raw_data)
                     except Exception:
                         batch_ok = 0

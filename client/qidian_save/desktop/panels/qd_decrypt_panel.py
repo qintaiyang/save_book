@@ -10,6 +10,9 @@ from PyQt6.QtCore import Qt, QObject, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QIcon
 
 
+from ...zip_utils import safe_extract_zip
+
+
 class _DecryptSignal(QObject):
     log = pyqtSignal(str)
     error = pyqtSignal(str)
@@ -632,7 +635,7 @@ class QDDecryptPanel(QWidget):
                 # 解压结果
                 extract_dir = os.path.join(self._qd_dir, f"decrypted_{int(time.time())}")
                 with zipfile.ZipFile(result_zip, "r") as zf:
-                    zf.extractall(extract_dir)
+                    safe_extract_zip(zf, extract_dir)
 
                 txt_count = len(list(Path(extract_dir).rglob("*.txt")))
                 self._sig.decrypt_done.emit(
