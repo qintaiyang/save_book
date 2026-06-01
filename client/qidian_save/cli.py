@@ -3,7 +3,7 @@ import sys, os, json, argparse, time, webbrowser, subprocess, io, zipfile
 from pathlib import Path
 from .api_client import QidianSaveClient
 from . import DATA_DIR
-from .zip_utils import safe_extract_zip
+from .zip_utils import safe_extract_zip, sanitize_filename
 from .qidian_client import search_books as qidian_search, get_catalog as qidian_catalog, get_bookshelf, load_cookies, set_cookie_path
 from .adb_utils import (
     scan_device, pull_device_files, inspect_database, create_qd_zip,
@@ -18,7 +18,10 @@ TOKEN_FILE = DATA_DIR / "token"
 def _save_token(token: str):
     TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
     TOKEN_FILE.write_text(token, encoding="utf-8")
-
+    try:
+        TOKEN_FILE.chmod(0o600)
+    except OSError:
+        pass
 
 def _load_token() -> str:
     if TOKEN_FILE.exists():
@@ -106,11 +109,12 @@ def cmd_catalog(args):
 
 def _cmd_backup_local_crawl(args):
     """新流程：客户端本地爬取原始数据 → zip → 上传服务端解码 → 下载结果"""
-    from .qidian_client import get_catalog as qidian_catalog, load_cookies, set_cookie_path, get_chapter_data
+    from .qidian_client import get_catalog as qidian_catalog, load_cookies, set_cookie_path
+    from .local_crawl_engine import local_crawl
 
     client = _get_client(args)
 
-    # 1. Cookie 准备
+    # 1. Cookie 准备 — 上传得到 cookies_ref
     cookies_ref = ""
     if args.cookies_ref:
         cookies_ref = args.cookies_ref
@@ -134,17 +138,19 @@ def _cmd_backup_local_crawl(args):
             print("未检测到起点登录 Cookie。请先扫码登录:")
             print("  方式 1: python -m qidian_save desktop")
             print("  方式 2: 直接指定 cookies-ref: --cookies-ref <ref>")
+            return
 
-    # 2. 创建服务端任务
+    # 2. 创建任务
     try:
-        task = client.start_backup(args.book_id, args.start, args.end, cookies_ref)
+        task = client.start_backup(args.book_id, args.start, args.end, cookies_ref,
+                                   server_crawl=False)
     except Exception as e:
         print(f"创建任务失败: {e}")
         return
     task_id = task["taskId"]
     print(f"任务已创建: {task_id}")
 
-    # 3. 本地获取目录
+    # 3. 获取目录
     qd_cookies = load_cookies()
     if not qd_cookies.get("ywguid"):
         print("未检测到本地起点 Cookie，无法开始爬取")
@@ -161,90 +167,46 @@ def _cmd_backup_local_crawl(args):
     end_idx = min(args.end or total, total)
     start_idx = max(1, args.start) - 1
     target = chapters[start_idx:end_idx]
-    BATCH = args.batch_size
-    DELAY = args.delay
+
+    if not target:
+        print("没有需要爬取的章节")
+        return
 
     # 4. 输出目录
     book_name = cat.get('bookName', f'book_{args.book_id}')
     output_dir = args.output or str(DATA_DIR / f"{book_name}_{args.book_id}")
-    os.makedirs(output_dir, exist_ok=True)
 
-    print(f"目标: {len(target)} 章, 每批 {BATCH} 章, 间隔 {DELAY}s")
+    print(f"目标: {len(target)} 章, 每批 {args.batch_size} 章, 间隔 {args.delay}s")
     print(f"输出: {output_dir}")
     print()
 
-    cookies_json = json.dumps(qd_cookies, ensure_ascii=False)
-    all_ok = True
+    # 5. 调用共享引擎
+    def _on_progress(current, total, msg):
+        sys.stdout.write(f"  {msg}... ")
+        sys.stdout.flush()
 
-    for batch_idx in range(0, len(target), BATCH):
-        batch = target[batch_idx:batch_idx + BATCH]
-        batch_num = batch_idx // BATCH + 1
-        total_batches = (len(target) + BATCH - 1) // BATCH
-        print(f"\n── 第 {batch_num}/{total_batches} 批 ({len(batch)} 章) ──")
+    def _on_progress_done(current, total, msg):
+        sys.stdout.write("OK\n")
 
-        # 4a. 下载原始数据
-        raw_data = []
-        for i, ch in enumerate(batch):
-            cid = ch["chapterId"]
-            cname = ch.get("chapterName", cid)
-            sys.stdout.write(f"  下载 [{i+1}/{len(batch)}] {cname[:30]}... ")
-            sys.stdout.flush()
-            data = get_chapter_data(args.book_id, cid, qd_cookies)
-            if data:
-                raw_data.append(data)
-                sys.stdout.write("OK\n")
-            else:
-                buy_status = "已购" if (not ch.get("isVip") or ch.get("isBuy")) else "未购"
-                sys.stdout.write(f"SKIP ({buy_status})\n")
+    success, failed = local_crawl(
+        client=client, task_id=task_id, book_id=args.book_id,
+        chapters=target, qd_cookies=qd_cookies,
+        output_dir=output_dir, batch_size=args.batch_size, delay=args.delay,
+        on_progress=lambda c, t, m: (_on_progress(c, t, m), _on_progress_done(c, t, m))[1],
+        on_batch_done=lambda count, msg: print(f"  {msg}"),
+    )
 
-            if i < len(batch) - 1:
-                time.sleep(DELAY)
-
-        if not raw_data:
-            print("  [!] 本批无有效数据，跳过")
-            continue
-
-        # 4b. 打包 zip
-        zip_buf = io.BytesIO()
-        with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            for rd in raw_data:
-                zf.writestr(f"{rd['chapterId']}.json", json.dumps(rd, ensure_ascii=False))
-        zip_bytes = zip_buf.getvalue()
-        print(f"  打包: {len(raw_data)} 章, {len(zip_bytes)/1024:.0f} KB")
-
-        # 4c. 上传解码
-        print(f"  上传解码中...")
-        try:
-            result_zip = client.decode_chapter_zip(task_id, zip_bytes, cookies_json)
-        except Exception as e:
-            print(f"  [!!] 解码失败: {e}")
-            all_ok = False
-            continue
-
-        # 4d. 解压保存
-        error_chapters = []
-        try:
-            with zipfile.ZipFile(io.BytesIO(result_zip)) as zf:
-                for name in zf.namelist():
-                    if name == "_errors.json":
-                        errors_data = json.loads(zf.read(name))
-                        error_chapters = errors_data if isinstance(errors_data, list) else []
-                content_names = [n for n in zf.namelist() if n != "_errors.json"]
-                if content_names:
-                    safe_extract_zip(zf, output_dir)
-                print(f"  保存: {len(raw_data)} 章 ({len(error_chapters)} 章失败)")
-                for ec in error_chapters:
-                    print(f"    [!!] {ec}")
-        except Exception as e:
-            print(f"  解压失败: {e}")
-            all_ok = False
-
-    # 5. 清理
+    # 6. 清理
     try:
         client.cleanup_task(task_id)
         print(f"\n任务 {task_id} 已清理")
     except Exception as e:
         print(f"\n清理失败: {e}")
+
+    if failed:
+        print(f"\n完成: {success} 成功, {failed} 失败")
+    else:
+        print(f"\n完成! 共 {success} 章保存到 {output_dir}")
 
     print(f"\n{'完成' if all_ok else '警告'}! 结果保存到: {output_dir}")
 
@@ -287,8 +249,9 @@ def _cmd_backup_server_crawl(args):
             print("  方式 1: python -m qidian_save desktop (启动桌面端, 在「起点登录」面板扫码)")
             print("  方式 2: 直接指定 cookies_ref: --cookies-ref <ref>")
 
-    # 2. 启动备份任务
-    task = client.start_backup(args.book_id, args.start, args.end, cookies_ref)
+    # 2. 启动备份任务（server_crawl=True 让服务端自动下载+解密）
+    task = client.start_backup(args.book_id, args.start, args.end, cookies_ref,
+                               server_crawl=True)
     task_id = task["taskId"]
     print(f"任务已创建: {task_id}")
 
@@ -308,7 +271,7 @@ def _cmd_backup_server_crawl(args):
     os.makedirs(output_dir, exist_ok=True)
 
     for ch in chapters:
-        safe_name = ch.get("chapterName", ch["chapterId"]).replace("/", "_")[:60]
+        safe_name = sanitize_filename(ch.get("chapterName", ch["chapterId"]))
         has_html = ch.get("hasHtml", False)
         if has_html:
             content = client.download_chapter(task_id, ch["chapterId"], format="html")
@@ -397,19 +360,27 @@ def cmd_bookshelf(args):
 
 def cmd_usage(args):
     client = _get_client(args)
-    u = client.get_usage()
-    print(f"今日用量: {u['chaptersUsed']} / {u['limit']} 次")
-    print(f"剩余: {u['remaining']} 次")
+    try:
+        u = client.get_usage()
+        print(f"今日用量: {u['chaptersUsed']} / {u['limit']} 次")
+        print(f"剩余: {u['remaining']} 次")
+    except Exception as e:
+        print(f"查询失败: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 def cmd_renew_api_key(args):
     """重新生成 API Key"""
     client = _get_client(args)
-    print("正在重新生成 API Key...")
-    result = client.renew_api_key()
-    api_key = result.get("api_key", "未知")
-    print(f"\n新的 API Key: {api_key}")
-    print("请更新你的 API Key 配置。旧的 API Key 已失效。")
+    try:
+        print("正在重新生成 API Key...")
+        result = client.renew_api_key()
+        api_key = result.get("api_key", "未知")
+        print(f"\n新的 API Key: {api_key}")
+        print("请更新你的 API Key 配置。旧的 API Key 已失效。")
+    except Exception as e:
+        print(f"重新生成失败: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 # ── .qd 配置 ──────────────────────────────────────────────────────

@@ -31,7 +31,7 @@ class UsagePanel(QWidget):
         cl.setSpacing(20)
 
         title = QLabel("  用量查询")
-        title.setStyleSheet("font-size: 22px; font-weight: bold; color: #1f2937;")
+        title.setProperty("widget-type", "panel-title")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         cl.addWidget(title)
 

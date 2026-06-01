@@ -1,5 +1,5 @@
 """.qd 解密面板 — 小白模式：拉取 → 选书 → 选章节 → 一键解密"""
-import os, sys, threading, sqlite3, zipfile, subprocess, json
+import os, sys, threading, sqlite3, zipfile, subprocess, json, tempfile
 from pathlib import Path
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
@@ -631,7 +631,7 @@ class QDDecryptPanel(QWidget):
                     self._sig.log.emit(f"解密任务 ID: {task_id}")
 
                 # 解压结果
-                extract_dir = os.path.join(self._qd_dir, f"decrypted_{int(time.time())}")
+                extract_dir = tempfile.mkdtemp(prefix="qd_decrypt_", dir=self._qd_dir)
                 with zipfile.ZipFile(result_zip, "r") as zf:
                     safe_extract_zip(zf, extract_dir)
 

@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QObject, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont
 from ... import DATA_DIR
-from ...zip_utils import safe_extract_zip
+from ...zip_utils import safe_extract_zip, sanitize_filename
 
 
 class _DownloadSignals(QObject):
@@ -58,6 +58,7 @@ class BackupPanel(QWidget):
         self._poll_gen = 0
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll_task)
+        self.destroyed.connect(self._stop_polling)
         self._init_ui()
 
     def _init_ui(self):
@@ -66,7 +67,7 @@ class BackupPanel(QWidget):
         layout.setSpacing(16)
 
         header = QLabel("在线备份")
-        header.setStyleSheet("font-size: 22px; font-weight: bold; color: #1f2937;")
+        header.setProperty("widget-type", "panel-title")
         layout.addWidget(header)
 
         # Task info card
@@ -120,18 +121,6 @@ class BackupPanel(QWidget):
         self.table.setColumnCount(3)
         self.table.setHorizontalHeaderLabels(["章节 ID", "章节名", "操作"])
         self.table.setAlternatingRowColors(True)
-        self.table.setStyleSheet("""
-            QTableWidget {
-                border: none; border-radius: 12px;
-                font-size: 13px; gridline-color: #f3f4f6;
-            }
-            QTableWidget::item { padding: 6px 10px; }
-            QHeaderView::section {
-                background: #f8fafc; border: none;
-                padding: 8px 10px; font-weight: bold;
-                font-size: 12px; color: #64748b;
-            }
-        """)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
         h = self.table.horizontalHeader()
@@ -174,17 +163,13 @@ class BackupPanel(QWidget):
 
     def load_task(self, task_id: int, server_crawl: bool = True,
                   book_id: str = "", qd_cookies: dict = None,
-                  start: int = 1, end: int = 0):
-        self._polling = False
-        self._poll_timer.stop()
-        self._poll_in_flight = False
-        self._poll_gen += 1
+                  checked_indices: list = None):
+        self._stop_polling()
         self.task_id = task_id
         self._server_crawl = server_crawl
         self._book_id = book_id
         self._qd_cookies = qd_cookies or {}
-        self._crawl_start = start
-        self._crawl_end = end
+        self._checked_indices = checked_indices or []
         self._crawling = False
         self.table.setRowCount(0)
         if server_crawl:
@@ -241,7 +226,7 @@ class BackupPanel(QWidget):
         self.label_status.setText(f"查询失败: {msg}")
 
     def _start_local_crawl(self):
-        """启动本地爬取线程"""
+        """启动本地爬取线程（通过共享引擎）"""
         if self._crawling:
             return
         self._crawling = True
@@ -249,9 +234,8 @@ class BackupPanel(QWidget):
         self.label_status.setText("准备中...")
 
         def _do():
-            from ...qidian_client import get_catalog as qidian_catalog, get_chapter_data
-            BATCH = 50
-            DELAY = 1.5
+            from ...qidian_client import get_catalog as qidian_catalog
+            from ...local_crawl_engine import local_crawl
 
             try:
                 cat = qidian_catalog(self._book_id, cookies=self._qd_cookies)
@@ -260,71 +244,30 @@ class BackupPanel(QWidget):
                     return
 
                 chapters = cat["chapters"]
-                total = len(chapters)
-                end_idx = min(self._crawl_end or total, total)
-                start_idx = max(1, self._crawl_start) - 1
-                target = chapters[start_idx:end_idx]
-                success = 0
-                failed = 0
+                if self._checked_indices:
+                    target = [chapters[i] for i in self._checked_indices if i < len(chapters)]
+                else:
+                    target = chapters
 
-                cookies_json = json.dumps(self._qd_cookies, ensure_ascii=False)
+                if not target:
+                    self._crawl_sig.finished.emit(0, 0)
+                    return
 
-                for batch_idx in range(0, len(target), BATCH):
-                    batch = target[batch_idx:batch_idx + BATCH]
+                # 包装 Qt 信号为回调
+                def _on_progress(cur, total, msg):
+                    self._crawl_sig.progress.emit(cur, total, msg)
 
-                    raw_data = []
-                    for i, ch in enumerate(batch):
-                        cid = ch["chapterId"]
-                        cname = ch.get("chapterName", cid)[:30]
-                        msg = f"下载 {batch_idx + i + 1}/{len(target)}: {cname}"
-                        self._crawl_sig.progress.emit(batch_idx + i, len(target), msg)
-                        data = get_chapter_data(self._book_id, cid, self._qd_cookies)
-                        if data:
-                            raw_data.append(data)
-                        if i < len(batch) - 1:
-                            time.sleep(DELAY)
+                def _on_batch_done(count, msg):
+                    self._crawl_sig.batch_done.emit(count, msg)
 
-                    if not raw_data:
-                        continue
-
-                    # 打包
-                    zip_buf = io.BytesIO()
-                    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                        for rd in raw_data:
-                            zf.writestr(f"{rd['chapterId']}.json",
-                                        json.dumps(rd, ensure_ascii=False))
-
-                    # 上传解码
-                    try:
-                        result_zip = self.client.decode_chapter_zip(
-                            self.task_id, zip_buf.getvalue(), cookies_json
-                        )
-                    except Exception as e:
-                        self._crawl_sig.batch_done.emit(0, f"解码失败: {e}")
-                        failed += len(raw_data)
-                        continue
-
-                    # 解压保存
-                    book_name = cat.get('bookName', f'book_{self._book_id}')
-                    output_dir = str(DATA_DIR / f"{book_name}_{self._book_id}")
-                    os.makedirs(output_dir, exist_ok=True)
-
-                    try:
-                        with zipfile.ZipFile(io.BytesIO(result_zip)) as zf:
-                            for name in zf.namelist():
-                                if name == "_errors.json":
-                                    errs = json.loads(zf.read(name))
-                                    failed += len(errs) if isinstance(errs, list) else 0
-                            safe_extract_zip(zf, output_dir)
-                            batch_ok = len(raw_data)
-                    except Exception:
-                        batch_ok = 0
-                        failed += len(raw_data)
-
-                    success += batch_ok
-                    self._crawl_sig.batch_done.emit(
-                        batch_ok, f"批 {batch_idx//BATCH + 1} 完成 ({len(raw_data)} 章)"
-                    )
+                success, failed = local_crawl(
+                    client=self.client, task_id=self.task_id,
+                    book_id=self._book_id, chapters=target,
+                    qd_cookies=self._qd_cookies,
+                    batch_size=50, delay=1.5,
+                    on_progress=_on_progress,
+                    on_batch_done=_on_batch_done,
+                )
 
                 self._crawl_sig.finished.emit(success, failed)
 
@@ -367,7 +310,7 @@ class BackupPanel(QWidget):
                 cname = ch.get("chapterName", cid)
                 has_html = ch.get("hasHtml", False)
                 try:
-                    safe_name = cname.replace("/", "_")[:60]
+                    safe_name = sanitize_filename(cname)
                     if has_html:
                         content = self.client.download_chapter(
                             self.task_id, cid, format="html"
@@ -444,12 +387,19 @@ class BackupPanel(QWidget):
         else:
             self.label_status.setText("无章节可处理")
 
+    def _stop_polling(self):
+        """停止轮询定时器，清空状态。面板销毁或清理时调用。"""
+        self._polling = False
+        self._poll_in_flight = False
+        self._poll_gen += 1
+        if self._poll_timer and self._poll_timer.isActive():
+            self._poll_timer.stop()
+
     def _cleanup(self):
         if not self.task_id:
             return
         try:
-            self._polling = False
-            self._poll_timer.stop()
+            self._stop_polling()
             self.client.cleanup_task(self.task_id)
             self.label_book.setText("任务已清理")
             self.label_status.setText("")

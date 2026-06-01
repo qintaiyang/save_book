@@ -13,9 +13,10 @@ from ...qidian_client import get_catalog as qidian_catalog, load_cookies
 class _DetailSignal(QObject):
     catalog_ready = pyqtSignal(dict)
     catalog_error = pyqtSignal(str)
-    backup_done = pyqtSignal(int, bool, int, int)  # (task_id, is_server_crawl, start, end)
+    backup_done = pyqtSignal(int, bool, list)  # (task_id, is_server_crawl, checked_indices)
     backup_failed = pyqtSignal(str)
     backup_finished = pyqtSignal()
+    backup_warning = pyqtSignal(str)  # 可恢复的警告，不影响继续
 
 
 CHK = Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled
@@ -43,7 +44,7 @@ class BookDetailPanel(QWidget):
         layout.setSpacing(16)
 
         header = QLabel("书籍详情")
-        header.setStyleSheet("font-size: 22px; font-weight: bold; color: #1f2937;")
+        header.setProperty("widget-type", "panel-title")
         layout.addWidget(header)
 
         # Book info card
@@ -77,19 +78,6 @@ class BookDetailPanel(QWidget):
         self.table.setColumnCount(3)
         self.table.setHorizontalHeaderLabels(["", "章节名", "状态"])
         self.table.setAlternatingRowColors(True)
-        self.table.setStyleSheet("""
-            QTableWidget {
-                border: none; border-radius: 12px;
-                font-size: 13px; gridline-color: #f3f4f6;
-            }
-            QTableWidget::item { padding: 6px 10px; }
-            QTableWidget::item:selected { background: transparent; }
-            QHeaderView::section {
-                background: #f8fafc; border: none;
-                padding: 8px 10px; font-weight: bold;
-                font-size: 12px; color: #64748b;
-            }
-        """)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self.table.verticalHeader().setVisible(False)
@@ -245,34 +233,52 @@ class BookDetailPanel(QWidget):
             QMessageBox.warning(self, "提示", "请先勾选要备份的章节")
             return
 
-        start = checked_rows[0] + 1
-        end = checked_rows[-1] + 1
+        # 传递实际勾选的行号（0-based），不再转换为 start/end 范围
+        checked_indices = sorted(checked_rows)
+
+        # 服务端爬取：服务端只认 start/end 范围，非连续选取只能走最小-最大范围
+        # 本地爬取：客户端用 checked_indices 精确过滤，只爬勾选的章节
+        start = checked_indices[0] + 1
+        end = checked_indices[-1] + 1
 
         self.btn_backup.setEnabled(False)
         self.btn_backup.setText("创建任务...")
 
         server_crawl = self.chk_server_crawl.isChecked()
 
+        # Cookie 准备（主线程，可弹对话框）
+        qd_cookies = load_cookies()
+        cookies_ref = ""
+        try:
+            cr = self.client.upload_qidian_cookies(qd_cookies)
+            cookies_ref = cr.get("cookiesRef", "")
+        except Exception as e:
+            ret = QMessageBox.warning(
+                self, "Cookie 上传失败",
+                f"Cookie 上传失败: {e}\n\n"
+                "付费章节可能无法解码。是否继续备份？\n"
+                "（选「否」取消操作，仅免费章节可正常下载）",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if ret != QMessageBox.StandardButton.Yes:
+                self._sig.backup_finished.emit()
+                return
+
         def _do():
             try:
-                qd_cookies = load_cookies()
                 if server_crawl:
-                    # 旧流程：服务端全包
                     result = self.client.start_backup(self.book_id, start, end,
-                                                      qidian_cookies=qd_cookies)
-                    task_id = result["taskId"]
+                                                      cookies_ref=cookies_ref,
+                                                      server_crawl=True,
+                                                      chapter_ids=checked_indices)
                 else:
-                    # 新流程：先上传 Cookie 再创建任务
-                    cookies_ref = ""
-                    try:
-                        cr = self.client.upload_qidian_cookies(qd_cookies)
-                        cookies_ref = cr.get("cookiesRef", "")
-                    except Exception as e:
-                        print(f"[detail] Cookie 上传失败: {e}", file=sys.stderr)
                     result = self.client.start_backup(self.book_id, start, end,
-                                                      cookies_ref=cookies_ref)
-                    task_id = result["taskId"]
-                self._sig.backup_done.emit(task_id, server_crawl, start, end)
+                                                      cookies_ref=cookies_ref,
+                                                      server_crawl=False,
+                                                      chapter_ids=checked_indices)
+                task_id = result["taskId"]
+                self._sig.backup_done.emit(task_id, server_crawl, checked_indices)
             except Exception as e:
                 print(f"[detail] 备份创建异常: {e}", file=sys.stderr)
                 self._sig.backup_failed.emit(str(e))
@@ -285,6 +291,6 @@ class BookDetailPanel(QWidget):
         self.btn_backup.setEnabled(True)
         self.btn_backup.setText("  开始备份")
 
-    def _on_backup_done(self, task_id: int, server_crawl: bool, start: int, end: int):
+    def _on_backup_done(self, task_id: int, server_crawl: bool, checked_indices: list):
         qd_cookies = load_cookies()
-        self.on_backup_started(task_id, server_crawl, self.book_id, qd_cookies, start, end)
+        self.on_backup_started(task_id, server_crawl, self.book_id, qd_cookies, checked_indices)

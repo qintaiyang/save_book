@@ -88,10 +88,15 @@ def load_config() -> dict:
 
 
 def save_config(cfg: dict):
-    config_path().write_text(
+    p = config_path()
+    p.write_text(
         json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    _log(f"配置已保存 → {config_path()}")
+    try:
+        p.chmod(0o600)
+    except OSError:
+        pass
+    _log(f"配置已保存 → {p}")
 
 
 # ── ADB 命令 ────────────────────────────────────────────────────────
@@ -120,6 +125,9 @@ def adb_su(cmd: str, timeout: int = 10, device_serial: str | None = None) -> sub
     注意: su -c 要求 COMMAND 是最后一个参数（之后的参数被视为 user/login），
     所以需要内部引号包装: su -c "cmd"。
     """
+    # 防御：只允许安全字符，防止参数注入
+    if not re.match(r'^[\w\s\-/\.:;=@,()\[\]{}]+$', cmd):
+        raise ValueError(f"不安全的 ADB 命令: {cmd[:80]}")
     base = _adb_prefix(device_serial)
     return subprocess.run(
         base + ["shell", "su", "-c", f'"{cmd}"'],

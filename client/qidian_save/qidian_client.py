@@ -28,7 +28,7 @@ def _mobile_get(url: str, params: dict = None, cookies: dict = None,
                 return resp
         except requests.RequestException:
             if attempt < max_retries - 1:
-                time.sleep(1)
+                time.sleep(1 + attempt)  # 指数退避: 1s, 2s
     return None
 
 
@@ -389,40 +389,57 @@ def save_cookies(cookies: dict):
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(cookies, f, ensure_ascii=False, indent=2)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass  # Windows 不支持 0600，不影响功能
 
 
 def get_chapter_data(book_id: str, chapter_id: str, cookies: dict = None) -> Optional[dict]:
-    """获取单章原始加密数据（调起点移动端 AJAX API）
+    """获取单章原始加密数据（从移动端 SSR 页面提取）
+
+    起点 /majax/chapter/getChapterInfo 已失效（始终返回 code=1），
+    改用 SSR 页面 vite-plugin-ssr_pageContext JSON 提取。
+
+    ⚠️ 边界角色：本函数仅做原始数据提取（从 SSR 页面拉取 chapterInfo），
+    不涉及任何解密/解码。提取的 cES/content/css/randomFont/fkp/fixedFontUrl
+    等原始字段将传给服务端 decode-zip API 进行实际解码。
 
     返回 decode-zip 输入格式：
-        {chapterId, chapterName, cES, content, css, randomFont, fkp}
+        {chapterId, chapterName, cES, content, css, randomFont, fkp, fixedFontUrl}
 
     返回 None 表示未购买或网络异常。
     """
-    url = "https://m.qidian.com/majax/chapter/getChapterInfo"
-    params = {"bookId": book_id, "chapterId": chapter_id}
+    url = f"https://m.qidian.com/chapter/{book_id}/{chapter_id}/"
     headers = {
         "User-Agent": MOBILE_UA,
-        "Accept": "application/json",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "zh-CN,zh;q=0.9",
-        "Referer": f"https://m.qidian.com/chapter/{book_id}/{chapter_id}/",
+        "Referer": "https://m.qidian.com/",
     }
     for attempt in range(2):
         try:
-            resp = _SESSION.get(url, params=params, headers=headers,
-                                cookies=cookies or {}, timeout=15)
+            resp = _SESSION.get(url, headers=headers,
+                                cookies=cookies or {}, timeout=20)
             if resp.status_code != 200:
                 log(f"get_chapter_data HTTP {resp.status_code} ({book_id}/{chapter_id})")
                 if attempt < 1:
                     time.sleep(1)
                     continue
                 return None
-            data = resp.json()
-            if data.get("code") != 0:
-                # code=1 = 未购买
-                log(f"get_chapter_data code={data.get('code')} ({book_id}/{chapter_id})")
+            m = re.search(
+                r'<script\s+id="vite-plugin-ssr_pageContext"[^>]*>(.*?)</script>',
+                resp.text, re.DOTALL,
+            )
+            if not m:
+                log(f"get_chapter_data 无 pageContext ({book_id}/{chapter_id})")
                 return None
-            ci = data["data"]["chapterInfo"]
+            data = json.loads(m.group(1))
+            ci = (data.get("pageContext", {}).get("pageProps", {})
+                  .get("pageData", {}).get("chapterInfo", {}))
+            if not ci or not ci.get("chapterName"):
+                log(f"get_chapter_data 无 chapterInfo ({book_id}/{chapter_id})")
+                return None
             return {
                 "chapterId": chapter_id,
                 "chapterName": ci.get("chapterName", ""),
@@ -431,6 +448,7 @@ def get_chapter_data(book_id: str, chapter_id: str, cookies: dict = None) -> Opt
                 "css": ci.get("css", ""),
                 "randomFont": ci.get("randomFont", ""),
                 "fkp": ci.get("fkp", ""),
+                "fixedFontUrl": ci.get("fixedFontWoff2", "") or ci.get("fixedFontTtf", ""),
             }
         except requests.RequestException as e:
             log(f"get_chapter_data 异常: {e} ({book_id}/{chapter_id})")
@@ -438,7 +456,7 @@ def get_chapter_data(book_id: str, chapter_id: str, cookies: dict = None) -> Opt
                 time.sleep(1)
                 continue
             return None
-        except (KeyError, ValueError, json.JSONDecodeError) as e:
+        except (KeyError, ValueError, json.JSONDecodeError, re.error) as e:
             log(f"get_chapter_data 解析失败: {e} ({book_id}/{chapter_id})")
             return None
     return None

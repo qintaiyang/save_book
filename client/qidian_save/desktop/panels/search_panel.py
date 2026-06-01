@@ -34,7 +34,7 @@ class SearchPanel(QWidget):
         layout.setSpacing(16)
 
         header = QLabel("搜索书籍")
-        header.setStyleSheet("font-size: 22px; font-weight: bold; color: #1f2937;")
+        header.setProperty("widget-type", "panel-title")
         layout.addWidget(header)
 
         # Search input row
@@ -68,20 +68,6 @@ class SearchPanel(QWidget):
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(["书籍 ID", "书名", "作者", "操作"])
         self.table.setAlternatingRowColors(True)
-        self.table.setStyleSheet("""
-            QTableWidget {
-                border: none; border-radius: 12px;
-                font-size: 13px;
-                gridline-color: #f3f4f6;
-            }
-            QTableWidget::item { padding: 8px 12px; }
-            QTableWidget::item:selected { background: #eff6ff; color: #1f2937; }
-            QHeaderView::section {
-                background: #f8fafc; border: none;
-                padding: 10px 12px; font-weight: bold;
-                font-size: 12px; color: #64748b;
-            }
-        """)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)

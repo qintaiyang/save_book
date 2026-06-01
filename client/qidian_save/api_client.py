@@ -1,6 +1,8 @@
 """纯 API 调用封装 — 不包含任何业务逻辑"""
 import os, zipfile, tempfile
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from typing import Optional, Union
 
 
@@ -30,6 +32,18 @@ class QidianSaveClient:
         self.base_url = base_url.rstrip("/")
         self.session = requests.Session()
         self.session.headers.update({"Accept": "application/json"})
+
+        # 自动重试：网络错误 + HTTP 429/5xx，指数退避 1s/2s/4s
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET", "POST", "DELETE"],
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
 
         if token:
             self.set_token(token)
@@ -102,11 +116,15 @@ class QidianSaveClient:
         return self._post("/api/backup/cookies", json={"cookies": cookies})
 
     def start_backup(self, book_id: str, start: int = 1, end: int = 0,
-                     cookies_ref: str = "", qidian_cookies: dict = None) -> dict:
+                     cookies_ref: str = "", qidian_cookies: dict = None,
+                     server_crawl: bool = True,
+                     chapter_ids: list = None) -> dict:
         body = {"book_id": book_id, "start": start, "end": end,
-                "cookies_ref": cookies_ref}
+                "cookies_ref": cookies_ref, "server_crawl": server_crawl}
         if qidian_cookies:
             body["qidian_cookies"] = qidian_cookies
+        if chapter_ids:
+            body["chapter_ids"] = chapter_ids
         return self._post("/api/backup/start", json=body)
 
     def get_task(self, task_id: int) -> dict:

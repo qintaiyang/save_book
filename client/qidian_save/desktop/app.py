@@ -23,7 +23,10 @@ TOKEN_FILE = DATA_DIR / "token"
 def _save_token(token: str):
     TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
     TOKEN_FILE.write_text(token, encoding="utf-8")
-
+    try:
+        TOKEN_FILE.chmod(0o600)
+    except OSError:
+        pass
 
 def _load_token() -> str:
     if TOKEN_FILE.exists():
@@ -165,9 +168,9 @@ class MainWindow(FluentWindow):
 
     def _on_backup_started(self, task_id: int, server_crawl: bool = True,
                            book_id: str = "", qd_cookies: dict = None,
-                           start: int = 1, end: int = 0):
+                           checked_indices: list = None):
         self.current_task_id = task_id
-        self.panels["backup"].load_task(task_id, server_crawl, book_id, qd_cookies, start, end)
+        self.panels["backup"].load_task(task_id, server_crawl, book_id, qd_cookies, checked_indices or [])
         self.switchTo(self.panels["backup"])
 
     # ── 主题 ───────────────────────────────────────────────
