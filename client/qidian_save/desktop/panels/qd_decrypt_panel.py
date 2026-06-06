@@ -308,6 +308,10 @@ class QDDecryptPanel(QWidget):
                 "font-size: 13px; padding: 4px 8px; border: none; text-align: left; background: transparent; color: #dc2626;"
             )
 
+    def _qd_default_dir(self) -> str:
+        """获取 qd_files 默认路径"""
+        return str(Path(__file__).resolve().parent.parent.parent.parent / "qd_files")
+
     # ── root 直接提取 ──────────────────────────────────────────────
 
     def _root_extract(self):
@@ -368,7 +372,7 @@ class QDDecryptPanel(QWidget):
         def _run():
             try:
                 from ...adb_utils import pull_device_files
-                output = str(Path(__file__).resolve().parent.parent.parent.parent / "qd_files")
+                output = self._qd_default_dir()
                 self._qd_dir = output
                 self._sig.log.emit(f"正在从 {label} 拉取 .qd 文件...")
                 result = pull_device_files(output, device_serial=serial)
@@ -644,57 +648,71 @@ class QDDecryptPanel(QWidget):
                 if task_id:
                     self._sig.log.emit(f"解密任务 ID: {task_id}")
 
-                # 就地解压到书籍目录，每本书 subdir/{bid}.txt
+                # 构建 chapterId → bookId 映射
+                ch_to_bid = {}
+                for bid, ch_id, _ in chapters_to_decrypt:
+                    ch_to_bid[ch_id] = bid
+
                 success = 0
                 failed = 0
                 by_book = {}
                 with zipfile.ZipFile(result_zip, "r") as zf:
                     for name in zf.namelist():
-                        if name.endswith(".txt") and "/" in name:
-                            bid, txt_name = name.split("/", 1)
-                            # 查找对应书籍目录
-                            for i in range(self.tree.topLevelItemCount()):
-                                user_item = self.tree.topLevelItem(i)
-                                for j in range(user_item.childCount()):
-                                    book_item = user_item.child(j)
-                                    bdata = book_item.data(0, Qt.ItemDataRole.UserRole)
-                                    if not bdata or bdata["bookId"] != bid:
-                                        continue
-                                    u_path = bdata.get("userId", uid)
-                                    book_dir = Path(self._qd_dir) / u_path / bid
-                                    chapter_id = txt_name.replace(".txt", "")
-                                    # 用有序章节名重命名输出文件
-                                    name_map = _load_chapter_names(book_dir, bid)
-                                    entry = name_map.get(chapter_id, None)
-                                    if entry:
-                                        order_num, ch_name = entry
-                                        safe_name = _sanitize_filename(ch_name)
-                                        digits = name_map.get("_digits", 0)
-                                        out_name = f"{order_num:0{digits}d}. {safe_name}.txt" if digits else txt_name
-                                    else:
-                                        out_name = txt_name
-                                    out_path = book_dir / out_name
-                                    # 同名防覆盖
-                                    counter = 1
-                                    while out_path.exists():
-                                        out_path = book_dir / f"{out_path.stem}_{counter}.txt"
-                                        counter += 1
-                                    out_path.write_bytes(zf.read(name))
-                                    success += 1
-                                    by_book.setdefault(bid, 0)
-                                    by_book[bid] += 1
-                                    self._sig.log.emit(f"✅ {out_name}")
-                                    break
-                        elif name.endswith("_errors.json"):
+                        if name == "_errors.json":
                             try:
                                 errors = json.loads(zf.read(name))
                                 failed = len(errors)
                                 self._sig.log.emit(f"⚠️ {failed} 章解密失败")
                             except Exception:
                                 pass
+                            continue
+
+                        if not name.endswith(".txt"):
+                            continue
+
+                        # 服务端返回扁平文件名: {chapterId}.txt
+                        chapter_id = name.replace(".txt", "")
+                        bid = ch_to_bid.get(chapter_id)
+                        if not bid:
+                            self._sig.log.emit(f"⚠ 未知章节 ID: {chapter_id}，跳过")
+                            failed += 1
+                            continue
+
+                        # 查找对应书籍目录
+                        for i in range(self.tree.topLevelItemCount()):
+                            user_item = self.tree.topLevelItem(i)
+                            for j in range(user_item.childCount()):
+                                book_item = user_item.child(j)
+                                bdata = book_item.data(0, Qt.ItemDataRole.UserRole)
+                                if not bdata or bdata["bookId"] != bid:
+                                    continue
+                                u_path = bdata.get("userId", uid)
+                                book_dir = Path(self._qd_dir) / u_path / bid
+
+                                # 用有序章节名重命名输出文件
+                                name_map = _load_chapter_names(book_dir, bid)
+                                entry = name_map.get(chapter_id, None)
+                                if entry:
+                                    order_num, ch_name = entry
+                                    safe_name = _sanitize_filename(ch_name)
+                                    digits = name_map.get("_digits", 0)
+                                    out_name = f"{order_num:0{digits}d}. {safe_name}.txt" if digits else name
+                                else:
+                                    out_name = name
+                                out_path = book_dir / out_name
+                                counter = 1
+                                while out_path.exists():
+                                    out_path = book_dir / f"{out_path.stem}_{counter}.txt"
+                                    counter += 1
+                                out_path.write_bytes(zf.read(name))
+                                success += 1
+                                by_book.setdefault(bid, 0)
+                                by_book[bid] += 1
+                                self._sig.log.emit(f"✅ {out_name}")
+                                break
 
                 by_book_str = ", ".join(f"{k}: {v}章" for k, v in by_book.items())
-                self._pending_open_dir = self._qd_dir
+                self._pending_open_dir = self._qd_dir or self._qd_default_dir()
                 self._sig.decrypt_done.emit(
                     f"✅ 解密完成！{success} 成功, {failed} 失败\n📁 {by_book_str}"
                 )
@@ -708,7 +726,8 @@ class QDDecryptPanel(QWidget):
         self._append_log(msg)
         self._set_busy(False)
         try:
-            folder = self._pending_open_dir or self._qd_dir
+            folder = self._pending_open_dir or self._qd_dir or self._qd_default_dir()
+            self._pending_open_dir = None
             if folder:
                 os.startfile(folder)
         except Exception:
@@ -717,19 +736,26 @@ class QDDecryptPanel(QWidget):
     # ── 合并已解密 ──────────────────────────────────────────────────
 
     def _do_merge(self):
-        base_dir = self._qd_dir or str(Path(__file__).resolve().parent.parent.parent.parent / "qd_files")
+        base_dir = self._qd_dir or self._qd_default_dir()
         include_metadata = not self.chk_no_copyright.isChecked()
         include_toc = self.chk_include_toc.isChecked()
         self._set_busy(True, "合并中...")
+        self._sig.log.emit(f"开始合并，扫描目录: {base_dir}")
 
         def _run():
             try:
-                # 扫描所有书籍目录下的 .txt 文件，按书名合并
                 base = Path(base_dir)
+                if not base.exists():
+                    self._sig.error.emit(f"目录不存在: {base_dir}")
+                    self._set_busy_from_thread(False)
+                    return
+
                 merged_dir = base.parent / "merged"
                 merged_dir.mkdir(parents=True, exist_ok=True)
 
-                book_groups = {}  # book_name → [txt_path]
+                # 扫描所有用户/书籍目录下的 .txt
+                book_groups = {}
+                total_found = 0
                 for user_dir in sorted(base.iterdir()):
                     if not user_dir.is_dir():
                         continue
@@ -740,18 +766,21 @@ class QDDecryptPanel(QWidget):
                         if not book_id.isdigit():
                             continue
                         tz_files = sorted(book_dir.glob("*.txt"))
-                        if not tz_files:
-                            continue
-
-                        # 跳过 0. 目录.txt 和 -10000.txt
                         tz_files = [f for f in tz_files
                                     if not f.name.startswith("0. ") and f.stem != "-10000"]
-
                         if not tz_files:
                             continue
 
                         book_name = self._get_book_name(book_dir, book_id) or f"书籍{book_id}"
-                        book_groups.setdefault(book_name, []).extend(tz_files)
+                        # 将单个书籍目录下的所有 .txt 按文件名排序后合并到一条记录
+                        book_groups[book_name] = tz_files
+                        total_found += len(tz_files)
+                        self._sig.log.emit(f"  找到 {book_name}: {len(tz_files)} 章")
+
+                if not book_groups:
+                    self._sig.error.emit("未找到任何已解密的 .txt 文件，请先解密")
+                    self._set_busy_from_thread(False)
+                    return
 
                 total_merged = 0
                 for book_name, txt_files in sorted(book_groups.items()):
@@ -762,39 +791,38 @@ class QDDecryptPanel(QWidget):
                         lines.append(f"《{book_name}》")
                         lines.append("=" * 40)
                         for tf in txt_files:
-                            chapter_title = tf.stem
-                            # 去掉序号前缀，只保留章节名
-                            title_clean = re.sub(r"^\d+\.\s*", "", chapter_title)
+                            title_clean = re.sub(r"^\d+\.\s*", "", tf.stem)
                             lines.append(f"  {title_clean}")
                         lines.append("=" * 40)
                         lines.append("")
 
-                    current_content = []
+                    chapter_texts = []
                     for tf in txt_files:
                         text = tf.read_text("utf-8", errors="replace")
                         if not include_metadata:
-                            # 尝试去掉首部版权信息（前 3 行含"版权所有"、"本书来自"等）
                             tlines = text.splitlines()
                             clean_start = 0
                             for i, tl in enumerate(tlines[:10]):
-                                if any(kw in tl for kw in ["版权所有", "本书来自", "www", ".com", "免责"]):
+                                if any(kw in tl for kw in ["版权所有", "本书来自", "www.", ".com", "免责"]):
                                     clean_start = i + 1
                                 else:
                                     break
                             text = "\n".join(tlines[clean_start:]).strip()
-                        current_content.append(text)
+                        chapter_texts.append(text)
 
-                    merged_text = "\n\n".join(current_content)
+                    merged_text = "\n\n".join(chapter_texts)
                     out_path.write_text(merged_text, encoding="utf-8")
+                    self._sig.log.emit(f"  ✅ 已合并: {safe_name}.txt ({len(txt_files)} 章)")
                     total_merged += len(txt_files)
 
                 self._pending_open_dir = str(merged_dir)
                 self._sig.decrypt_done.emit(
-                    f"✅ 合并完成！共 {total_merged} 章保存到:\n📁 {merged_dir}"
+                    f"✅ 合并完成！共 {total_merged} 章合并到 {len(book_groups)} 本书\n📁 {merged_dir}"
                 )
             except Exception as e:
                 import traceback
-                self._sig.error.emit(f"合并失败: {e}")
+                self._sig.log.emit(f"❌ 合并异常: {e}")
+                self._sig.log.emit(traceback.format_exc())
                 self._set_busy_from_thread(False)
 
         threading.Thread(target=_run, daemon=True).start()
@@ -827,7 +855,7 @@ class QDDecryptPanel(QWidget):
     # ── 工具 ────────────────────────────────────────────────────────
 
     def _open_dir(self):
-        d = self._qd_dir or str(Path(__file__).resolve().parent.parent.parent.parent / "qd_files")
+        d = self._qd_dir or self._qd_default_dir()
         os.makedirs(d, exist_ok=True)
         os.startfile(d)
 
