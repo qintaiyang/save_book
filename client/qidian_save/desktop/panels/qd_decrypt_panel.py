@@ -5,6 +5,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QLineEdit, QTextEdit, QFrame, QMessageBox, QTreeWidget,
     QTreeWidgetItem, QHeaderView, QCheckBox, QAbstractItemView,
+    QComboBox,
 )
 from PyQt6.QtCore import Qt, QObject, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QIcon
@@ -61,12 +62,11 @@ class QDDecryptPanel(QWidget):
         self.label_device.clicked.connect(self._check_device)
         tr.addWidget(self.label_device)
 
-        self.input_device = QLineEdit()
-        self.input_device.setPlaceholderText("端口号（留空自动检测手机）")
-        self.input_device.setFixedWidth(180)
+        self.input_device = QComboBox()
+        self.input_device.setMinimumWidth(200)
         self.input_device.setFixedHeight(34)
         self.input_device.setStyleSheet(
-            "padding: 2px 8px; font-size: 13px; border: 1px solid #d0d0d0; border-radius: 6px;"
+            "padding: 2px 4px; font-size: 13px; border: 1px solid #d0d0d0; border-radius: 6px;"
         )
         tr.addWidget(self.input_device)
 
@@ -199,34 +199,40 @@ class QDDecryptPanel(QWidget):
 
     # ── ADB 检测 ────────────────────────────────────────────────────
 
-    def _resolve_serial(self) -> str | None:
-        """解析设备号输入框的值到设备序列号
-
-        - 纯数字（如 5555）→ 127.0.0.1:<port>
-        - 含 ip:port → 原样使用
-        - 留空 → 自动检测，过滤模拟器，取第一个真机
-        """
-        text = self.input_device.text().strip()
-        if not text:
-            from ...adb_utils import list_devices
+    def _refresh_device_list(self):
+        """刷新设备下拉列表"""
+        from ...adb_utils import list_devices
+        self.input_device.clear()
+        self.input_device.addItem("自动检测（首个设备）", "")
+        try:
             devices = list_devices()
-            # 过滤掉模拟器（serial 含 emulator 字样的）
-            real = [d for d in devices if "emulator" not in d["serial"]]
-            if real:
-                return real[0]["serial"]
-            if devices:
-                return devices[0]["serial"]
-            return None
-        if text.isdigit():
-            return f"127.0.0.1:{text}"
-        return text
+            for d in devices:
+                label = d["serial"]
+                if "emulator" in label:
+                    label += "  [模拟器]"
+                else:
+                    label += "  [真机]"
+                self.input_device.addItem(label, d["serial"])
+        except Exception:
+            pass
+
+    def _resolve_serial(self) -> str | None:
+        """从下拉框获取用户选择的设备，未选择时自动检测"""
+        serial = self.input_device.currentData()
+        if serial:
+            return serial
+        # 自动检测模式
+        from ...adb_utils import list_devices
+        devices = list_devices()
+        real = [d for d in devices if "emulator" not in d["serial"]]
+        return (real[0] if real else devices[0])["serial"] if devices else None
 
     def _check_device(self):
-        """检测 ADB 状态（与 _resolve_serial 逻辑一致）"""
+        """检测 ADB 状态并刷新下拉列表"""
+        self._refresh_device_list()
         try:
             from ...adb_utils import list_devices
             devices = list_devices()
-            # 优先真机，无真机时模拟器也可用（与 _resolve_serial 一致）
             real = [d for d in devices if "emulator" not in d["serial"]]
             if real:
                 text = f"✅ 真机已连接 ({real[0]['serial']})"
