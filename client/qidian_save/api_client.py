@@ -110,6 +110,10 @@ class QidianSaveClient:
         """邮箱+密码登录，返回 {"access_token": "...", "token_type": "bearer"}（免认证）
 
         注意：使用 application/x-www-form-urlencoded。
+
+        Raises:
+            ApiError: HTTP 400 时 detail 为 "LOGIN_BAD_CREDENTIALS"（密码错误）
+                      或 "LOGIN_USER_NOT_ACTIVE"（账号未激活）
         """
         return self._post_form("/auth/jwt/login", {
             "username": email, "password": password,

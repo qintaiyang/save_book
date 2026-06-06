@@ -71,7 +71,13 @@ def cmd_login(args):
         _save_token(token)
         print(f"Token 已保存到 {TOKEN_FILE}，下次启动将自动登录")
     except Exception as e:
-        print(f"登录失败: {e}")
+        msg = str(e)
+        if "LOGIN_BAD_CREDENTIALS" in msg:
+            print("登录失败: 邮箱或密码错误")
+        elif "REGISTER_USER_ALREADY_EXISTS" in msg:
+            print("登录失败: 该邮箱尚未注册或密码错误")
+        else:
+            print(f"登录失败: {msg}")
 
 def cmd_search(args):
     results = qidian_search(args.keyword)

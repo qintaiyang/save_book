@@ -1,5 +1,5 @@
-""".qd 解密面板 — 小白模式：拉取 → 选书 → 选章节 → 一键解密"""
-import os, sys, threading, sqlite3, zipfile, subprocess, json, tempfile
+""".qd 上传解密面板 — ADB 拉取 → 选章节 → 上传服务端解密"""
+import os, sys, threading, sqlite3, zipfile, json, tempfile, re
 from pathlib import Path
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
@@ -10,8 +10,50 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QObject, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QIcon
 
-
 from ...zip_utils import safe_extract_zip
+
+
+# ── 工具函数（无解密逻辑） ─────────────────────────────────────────
+
+def _load_chapter_names(book_dir: Path, book_id: str = "") -> dict:
+    """从书籍目录的 SQLite DB 加载 ChapterId → (order_num, ChapterName)"""
+    candidates = []
+    if book_id:
+        candidates.append(book_dir / f"{book_id}.qd")
+    candidates.append(book_dir.with_suffix(".qd"))
+    candidates.append(book_dir.parent / "0.qd")
+
+    for db_path in candidates:
+        if db_path.exists() and db_path.stat().st_size >= 100:
+            try:
+                conn = sqlite3.connect(str(db_path))
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT ChapterId, ChapterName FROM chapter "
+                    "WHERE ChapterName IS NOT NULL "
+                    "ORDER BY VolumeCode, ShowOrder"
+                )
+                rows = cur.fetchall()
+                total = len(rows)
+                digits = len(str(total))
+                mapping = {"_digits": digits}
+                for i, (cid, cname) in enumerate(rows, start=1):
+                    mapping[str(cid)] = (i, cname)
+                conn.close()
+                return mapping
+            except Exception:
+                continue
+    return {}
+
+
+def _sanitize_filename(name: str) -> str:
+    invalid = r'<>:"/\|?*'
+    for ch in invalid:
+        name = name.replace(ch, " ")
+    name = name.strip(". ")
+    if len(name) > 120:
+        name = name[:120].rstrip()
+    return name or "未命名"
 
 
 class _DecryptSignal(QObject):
@@ -21,7 +63,7 @@ class _DecryptSignal(QObject):
     decrypt_done = pyqtSignal(str)
     params_ready = pyqtSignal(str, str, str)
     busy_changed = pyqtSignal(bool)
-    # capture_status 已废弃，由 extract_params() 替代
+    book_name_ready = pyqtSignal(str, str)  # bookId, bookName
 
 
 class QDDecryptPanel(QWidget):
@@ -35,11 +77,10 @@ class QDDecryptPanel(QWidget):
         self._sig.decrypt_done.connect(self._on_decrypt_done)
         self._sig.params_ready.connect(self._fill_params)
         self._sig.busy_changed.connect(self._set_busy)
-        self._qd_dir = ""           # 拉取到的 qd_files 目录
-        self._current_book_id = ""  # 当前选中的书籍 ID
-        self._current_book_dir = "" # 当前选中的书籍目录
-        self._chapter_map = {}      # chapterId → chapterName 映射
-        self._selected_ids = set()  # 用户勾选的章节 ID
+        self._sig.book_name_ready.connect(self._apply_book_name)
+        self._qd_dir = ""
+        self._chapter_map = {}
+        self._pending_open_dir = None
         self._init_ui()
         self._check_device()
 
@@ -127,7 +168,7 @@ class QDDecryptPanel(QWidget):
 
         layout.addWidget(center, 1)
 
-        # ── 底部：解密按钮 + 日志 ──
+        # ── 底部：操作按钮 + 日志 ──
         bottom = QFrame()
         bottom.setStyleSheet("background: white; border-radius: 10px; padding: 10px;")
         bl = QVBoxLayout(bottom)
@@ -135,22 +176,19 @@ class QDDecryptPanel(QWidget):
 
         action_row = QHBoxLayout()
 
-        # 参数区域折叠成一行小字
+        # 参数区域
         params_row = QHBoxLayout()
         params_row.setSpacing(6)
         self.input_qimei = QLineEdit()
         self.input_qimei.setPlaceholderText("QIMEI36（未设置则跳过解密）")
-        # 输入框样式由全局 QSS 控制
         params_row.addWidget(self.input_qimei, 1)
 
         self.input_pool = QLineEdit()
         self.input_pool.setPlaceholderText("Pool")
-        # 输入框样式由全局 QSS 控制
         params_row.addWidget(self.input_pool, 1)
 
         self.input_userid = QLineEdit()
         self.input_userid.setPlaceholderText("UserID")
-        # 输入框样式由全局 QSS 控制
         params_row.addWidget(self.input_userid, 1)
 
         btn_load = QPushButton("加载")
@@ -167,7 +205,7 @@ class QDDecryptPanel(QWidget):
 
         bl.addLayout(params_row)
 
-        self.btn_decrypt = QPushButton("  解密选中章节")
+        self.btn_decrypt = QPushButton("  上传解密选中章节")
         self.btn_decrypt.setProperty("btn-type", "secondary")
         self.btn_decrypt.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_decrypt.setFixedHeight(40)
@@ -181,8 +219,24 @@ class QDDecryptPanel(QWidget):
         self.btn_select_all.clicked.connect(self._toggle_select_all)
         action_row.addWidget(self.btn_select_all)
 
-        action_row.addStretch()
+        self.btn_merge = QPushButton("  合并已解密")
+        self.btn_merge.setProperty("btn-type", "secondary")
+        self.btn_merge.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_merge.setFixedHeight(40)
+        self.btn_merge.clicked.connect(self._do_merge)
+        action_row.addWidget(self.btn_merge)
 
+        self.chk_no_copyright = QCheckBox("不含版权信息")
+        self.chk_no_copyright.setChecked(True)
+        self.chk_no_copyright.setStyleSheet("font-size: 12px; color: #64748b;")
+        action_row.addWidget(self.chk_no_copyright)
+
+        self.chk_include_toc = QCheckBox("包含目录")
+        self.chk_include_toc.setChecked(False)
+        self.chk_include_toc.setStyleSheet("font-size: 12px; color: #64748b;")
+        action_row.addWidget(self.chk_include_toc)
+
+        action_row.addStretch()
         bl.addLayout(action_row)
 
         self.log_output = QTextEdit()
@@ -200,11 +254,10 @@ class QDDecryptPanel(QWidget):
     # ── ADB 检测 ────────────────────────────────────────────────────
 
     def _refresh_device_list(self):
-        """刷新设备下拉列表"""
-        from ...adb_utils import list_devices
         self.input_device.clear()
         self.input_device.addItem("自动检测（首个设备）", "")
         try:
+            from ...adb_utils import list_devices
             devices = list_devices()
             for d in devices:
                 label = d["serial"]
@@ -217,18 +270,15 @@ class QDDecryptPanel(QWidget):
             pass
 
     def _resolve_serial(self) -> str | None:
-        """从下拉框获取用户选择的设备，未选择时自动检测"""
         serial = self.input_device.currentData()
         if serial:
             return serial
-        # 自动检测模式
         from ...adb_utils import list_devices
         devices = list_devices()
         real = [d for d in devices if "emulator" not in d["serial"]]
         return (real[0] if real else devices[0])["serial"] if devices else None
 
     def _check_device(self):
-        """检测 ADB 状态并刷新下拉列表"""
         self._refresh_device_list()
         try:
             from ...adb_utils import list_devices
@@ -261,7 +311,6 @@ class QDDecryptPanel(QWidget):
     # ── root 直接提取 ──────────────────────────────────────────────
 
     def _root_extract(self):
-        """从已 root 设备/模拟器直接提取解密参数"""
         serial = self._resolve_serial()
         label = serial or "当前设备"
         self._append_log(f"正在通过 root 从 {label} 提取参数...")
@@ -269,7 +318,6 @@ class QDDecryptPanel(QWidget):
         def _run():
             try:
                 from ...adb_utils import extract_params, load_config, save_config
-
                 result = extract_params(device_serial=serial)
                 qimei36 = result.get("qimei36", "")
                 user_id = result.get("userId", "")
@@ -299,8 +347,6 @@ class QDDecryptPanel(QWidget):
                     if pool_b64:
                         cfg["pool_b64"] = pool_b64
                     save_config(cfg)
-
-                    # 回填 UI（通过信号桥安全更新主线程）
                     self._sig.params_ready.emit(qimei36, user_id, pool_b64)
 
                 self._sig.log.emit(f"🛠️ root 提取完成: {', '.join(collected)}")
@@ -311,29 +357,23 @@ class QDDecryptPanel(QWidget):
 
     # ── 拉取书籍 ────────────────────────────────────────────────────
 
-    # （mitmproxy 参数捕获已移除，使用 🛠️ root提取 替代）
-
     def _pull_books(self):
         serial = self._resolve_serial()
         if not serial:
             self._sig.error.emit("未检测到 Android 设备，请连接 USB 或输入端口号")
             return
         label = serial
-
         self._set_busy(True, "拉取中...")
 
         def _run():
             try:
                 from ...adb_utils import pull_device_files
-
                 output = str(Path(__file__).resolve().parent.parent.parent.parent / "qd_files")
                 self._qd_dir = output
                 self._sig.log.emit(f"正在从 {label} 拉取 .qd 文件...")
                 result = pull_device_files(output, device_serial=serial)
                 qd_count = result["qdFiles"]
                 self._sig.log.emit(f"拉取完成：{qd_count} 个文件")
-
-                # 扫描拉取到的目录，识别书籍
                 self._scan_local_books(output)
             except Exception as e:
                 self._sig.error.emit(str(e))
@@ -342,91 +382,87 @@ class QDDecryptPanel(QWidget):
         threading.Thread(target=_run, daemon=True).start()
 
     def _scan_local_books(self, qd_dir: str):
-        """扫描本地 qd_files 目录，根据 .qd 文件名 + SQLite + 书架匹配书籍"""
+        """扫描本地 qd_files 目录，匹配章节名映射"""
         self._sig.log.emit("正在读取书籍信息...")
         base = Path(qd_dir)
         books = []
 
-        # 尝试从书架获取书名映射（静默，失败不阻塞）
-        book_names = {}  # bookId → bookName
-        try:
-            from ...qidian_client import get_bookshelf, load_cookies
-            cookies = load_cookies()
-            if cookies:
-                shelf = get_bookshelf(cookies)
-                for b in shelf:
-                    book_names[b["bookId"]] = b["bookName"]
-                if book_names:
-                    self._sig.log.emit(f"已从书架匹配 {len(book_names)} 本书名")
-        except Exception:
-            pass
-
         for user_dir in sorted(base.iterdir()):
             if not user_dir.is_dir():
                 continue
-
-            # 找书籍子目录（每个子目录名 = bookId，内含章节 .qd 文件）
             for book_dir in sorted(user_dir.iterdir()):
                 if not book_dir.is_dir():
                     continue
                 book_id = book_dir.name
                 if book_id == "0" or not book_id.isdigit():
                     continue
-
-                # 列出该目录下所有 .qd 文件（排除 -10000.qd 元数据文件）
                 qd_files = sorted(book_dir.glob("*.qd"))
                 chapter_files = [f for f in qd_files if f.stem != "-10000" and f.stem.lstrip("-").isdigit()]
-
                 if not chapter_files:
                     continue
 
-                # 尝试从 SQLite 数据库读取章节名（优先书籍目录内，兼容旧版 userId 根目录）
-                db_path = book_dir / f"{book_id}.qd"
-                if not db_path.exists():
-                    db_path = user_dir / f"{book_id}.qd"
-                chapter_names = {}  # chapterId → {name, isVip}
-                if db_path.exists() and db_path.stat().st_size > 1000:
-                    hdr = db_path.read_bytes()[:4]
-                    if hdr == b"SQLi":
-                        try:
-                            conn = sqlite3.connect(str(db_path))
-                            cur = conn.cursor()
-                            cur.execute("SELECT ChapterId, ChapterName, IsVip FROM chapter")
-                            for r in cur.fetchall():
-                                chapter_names[str(r[0])] = {
-                                    "name": r[1] or str(r[0]),
-                                    "isVip": bool(r[2]),
-                                }
-                            conn.close()
-                        except Exception:
-                            pass
-
-                # 组装章节列表：只包含实际有 .qd 文件的章节
+                # 从 SQLite DB 加载章节名映射（有序）
+                name_map = _load_chapter_names(book_dir, book_id)
                 chapters = []
                 for cf in chapter_files:
-                    cid = cf.stem
-                    info = chapter_names.get(cid, {"name": cid, "isVip": False})
+                    ch_id = cf.stem
+                    entry = name_map.get(ch_id, None)
+                    display_name = entry[1] if entry else ch_id
                     chapters.append({
-                        "id": cid,
-                        "name": info["name"],
-                        "isVip": info["isVip"],
-                        "size": cf.stat().st_size,
+                        "id": ch_id, "name": display_name, "size": cf.stat().st_size,
                     })
 
-                # 从书架匹配书名，没有则用 ID
-                book_name = book_names.get(book_id, f"书籍 {book_id}")
-
+                # 从 SQLite 元数据获取真实书名
+                db_book_name = self._get_book_name(book_dir, book_id)
                 books.append({
                     "bookId": book_id,
-                    "bookName": book_name,
-                    "userId": user_dir.name,
-                    "bookDir": str(book_dir),
-                    "chapters": chapters,
-                    "downloaded": len(chapters),
-                    "total": len(chapters),
+                    "bookName": db_book_name or f"书籍 {book_id}",
+                    "userId": user_dir.name, "bookDir": str(book_dir),
+                    "chapters": chapters, "downloaded": len(chapters), "total": len(chapters),
                 })
 
         self._sig.book_list_ready.emit(books)
+
+    @staticmethod
+    def _get_book_name(book_dir: Path, book_id: str) -> str:
+        """从 SQLite DB 元数据章节提取真实书名"""
+        candidates = []
+        if book_id:
+            candidates.append(book_dir / f"{book_id}.qd")
+        candidates.append(book_dir.with_suffix(".qd"))
+        candidates.append(book_dir.parent / "0.qd")
+        for db_path in candidates:
+            if db_path.exists() and db_path.stat().st_size >= 100:
+                try:
+                    conn = sqlite3.connect(str(db_path))
+                    cur = conn.cursor()
+                    cur.execute(
+                        "SELECT ChapterName FROM chapter WHERE ChapterId=-10000 LIMIT 1"
+                    )
+                    row = cur.fetchone()
+                    if row and row[0]:
+                        name = row[0]
+                        if name.startswith("{") and '"BookName"' in name:
+                            try:
+                                data = json.loads(name)
+                                if data.get("BookName"):
+                                    return data["BookName"]
+                            except Exception:
+                                pass
+                        return name
+                    cur.execute(
+                        "SELECT ChapterName FROM chapter "
+                        "WHERE VolumeCode=0 AND ChapterName IS NOT NULL "
+                        "AND ChapterName != '版权信息' "
+                        "ORDER BY ShowOrder LIMIT 1"
+                    )
+                    row = cur.fetchone()
+                    if row and row[0]:
+                        return row[0]
+                    conn.close()
+                except Exception:
+                    pass
+        return ""
 
     def _show_books(self, books: list):
         self.tree.clear()
@@ -438,39 +474,25 @@ class QDDecryptPanel(QWidget):
             self._set_busy(False)
             return
 
-        # 按用户分组（dict 插入有序，Python 3.7+）
         user_books = {}
         for b in books:
             uid = b.get("userId", "unknown")
             user_books.setdefault(uid, []).append(b)
 
         for uid, ub in user_books.items():
-            # 用户级别
             user_item = QTreeWidgetItem([f"  👤 用户 {uid}", f"{len(ub)} 本书", ""])
             user_item.setData(0, Qt.ItemDataRole.UserRole, ("user", uid))
             user_item.setChildIndicatorPolicy(QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator)
             user_item.setExpanded(True)
 
             for b in ub:
-                vip_count = sum(1 for ch in b["chapters"] if ch["isVip"])
-                free_count = sum(1 for ch in b["chapters"] if not ch["isVip"])
-                label = f"  📖 {b['bookName']} ({b['bookId']})"
-                status = f"{b['total']} 章"
-                info = f"免费{free_count}+付费{vip_count}"
-
-                book_item = QTreeWidgetItem([label, status, info])
+                book_item = QTreeWidgetItem([f"  📖 {b['bookName']} ({b['bookId']})", f"{b['total']} 章", ""])
                 book_item.setData(0, Qt.ItemDataRole.UserRole, b)
                 book_item.setChildIndicatorPolicy(QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator)
 
-                # 显示所有章节（带复选框）
                 for ch in b["chapters"]:
-                    vip_tag = "🔒" if ch["isVip"] else "📄"
                     size_kb = ch.get("size", 0) // 1024
-                    ch_item = QTreeWidgetItem([
-                        f"  {vip_tag} {ch['name']}",
-                        ch["id"],
-                        f"{size_kb}KB",
-                    ])
+                    ch_item = QTreeWidgetItem([f"  📄 {ch['name']}", ch["id"], f"{size_kb}KB"])
                     ch_item.setData(0, Qt.ItemDataRole.UserRole, ("chapter", b["bookId"], ch))
                     ch_item.setFlags(ch_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                     ch_item.setCheckState(0, Qt.CheckState.Unchecked)
@@ -488,34 +510,27 @@ class QDDecryptPanel(QWidget):
     # ── 全选/取消 ───────────────────────────────────────────────────
 
     def _on_item_changed(self, item, column):
-        """章节勾选状态变化时更新按钮"""
         if column == 0:
             data = item.data(0, Qt.ItemDataRole.UserRole)
             if data and isinstance(data, tuple) and data[0] == "chapter":
                 QTimer.singleShot(0, self._update_selected_count)
 
     def _toggle_select_all(self):
-        """全选当前选中书籍的全部章节"""
-        # 找当前选中的书籍节点
         book_item = None
         selected = self.tree.selectedItems()
         for item in selected:
             data = item.data(0, Qt.ItemDataRole.UserRole)
             if isinstance(data, dict) and data.get("bookId"):
-                # 选中了书籍节点
                 book_item = item
                 break
             elif isinstance(data, tuple) and data[0] == "chapter":
-                # 选中了章节 → 找父节点（书籍）
                 book_item = item.parent()
                 break
             elif isinstance(data, tuple) and data[0] == "user":
-                # 选中了用户 → 取该用户下第一本书
                 if item.childCount() > 0:
                     book_item = item.child(0)
                 break
 
-        # 仍然没找到 → 取树中第一本书
         if not book_item:
             for i in range(self.tree.topLevelItemCount()):
                 user = self.tree.topLevelItem(i)
@@ -524,20 +539,17 @@ class QDDecryptPanel(QWidget):
                     break
 
         if not book_item:
-            return  # 树上没有书
+            return
 
-        # 检查该书籍下是否全部已选
         all_checked = True
         for k in range(book_item.childCount()):
             if book_item.child(k).checkState(0) != Qt.CheckState.Checked:
                 all_checked = False
                 break
 
-        # 切换该书籍下所有章节
         new_state = Qt.CheckState.Unchecked if all_checked else Qt.CheckState.Checked
         for k in range(book_item.childCount()):
             book_item.child(k).setCheckState(0, new_state)
-
         self._update_selected_count()
 
     def _update_selected_count(self):
@@ -549,13 +561,12 @@ class QDDecryptPanel(QWidget):
                 for k in range(book.childCount()):
                     if book.child(k).checkState(0) == Qt.CheckState.Checked:
                         count += 1
-        self.btn_decrypt.setText(f"  解密选中章节 ({count})" if count else "  解密选中章节")
+        self.btn_decrypt.setText(f"  上传解密选中章节 ({count})" if count else "  上传解密选中章节")
         self.btn_decrypt.setEnabled(count > 0)
 
-    # ── 解密 ────────────────────────────────────────────────────────
+    # ── 解密（走服务端 API） ────────────────────────────────────────
 
     def _do_decrypt(self):
-        # 收集勾选的章节（3 层树：User → Book → Chapter）
         chapters_to_decrypt = []
         for i in range(self.tree.topLevelItemCount()):
             user_item = self.tree.topLevelItem(i)
@@ -573,7 +584,7 @@ class QDDecryptPanel(QWidget):
             return
 
         self._set_busy(True, "解密中...")
-        self._sig.log.emit(f"准备解密 {len(chapters_to_decrypt)} 章（来自 {len(set(c[0] for c in chapters_to_decrypt))} 本书）...")
+        self._sig.log.emit(f"准备上传 {len(chapters_to_decrypt)} 章到服务端解密...")
 
         def _run():
             try:
@@ -586,9 +597,8 @@ class QDDecryptPanel(QWidget):
                     self._set_busy_from_thread(False)
                     return
 
-                # 按书籍分组，从对应目录收集 .qd 文件
-                import time, tempfile
-                qd_files = []  # [(full_path, arcname_in_zip)]
+                # 按书籍从对应目录收集 .qd 文件
+                qd_files = []
                 for i in range(self.tree.topLevelItemCount()):
                     user_item = self.tree.topLevelItem(i)
                     for j in range(user_item.childCount()):
@@ -611,40 +621,82 @@ class QDDecryptPanel(QWidget):
                         for ch_id, _ch_name in [(c[1], c[2]) for c in book_chapters]:
                             fp = book_dir / f"{ch_id}.qd"
                             if fp.exists():
-                                # arcname 用 bookId/chapterId.qd 避免跨书文件名冲突
                                 qd_files.append((str(fp), f"{bid}/{ch_id}.qd"))
                             else:
                                 self._sig.log.emit(f"⚠ 未找到章节文件: {bid}/{ch_id}.qd")
 
                 if not qd_files:
-                    self._sig.error.emit("未找到对应的 .qd 文件（章节可能未下载到手机）")
+                    self._sig.error.emit("未找到对应的 .qd 文件")
                     self._set_busy_from_thread(False)
                     return
 
-                # 打包 zip
-                zip_path = os.path.join(tempfile.gettempdir(), f"qd_decrypt_{int(time.time())}.zip")
+                # 打包 zip 上传服务端解密
+                import time as _time
+                zip_path = os.path.join(tempfile.gettempdir(), f"qd_decrypt_{int(_time.time())}.zip")
                 with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
                     for fp, arcname in qd_files:
                         zf.write(fp, arcname)
 
                 self._sig.log.emit(f"已打包 {len(qd_files)} 个文件，上传服务端解密...")
-
-                # 上传解密
                 result = self.client.decrypt_qd_zip(zip_path, qimei, uid, pool)
                 result_zip = result["zip_path"]
                 task_id = result.get("task_id")
                 if task_id:
                     self._sig.log.emit(f"解密任务 ID: {task_id}")
 
-                # 解压结果
-                extract_dir = tempfile.mkdtemp(prefix="qd_decrypt_", dir=self._qd_dir)
+                # 就地解压到书籍目录，每本书 subdir/{bid}.txt
+                success = 0
+                failed = 0
+                by_book = {}
                 with zipfile.ZipFile(result_zip, "r") as zf:
-                    safe_extract_zip(zf, extract_dir)
+                    for name in zf.namelist():
+                        if name.endswith(".txt") and "/" in name:
+                            bid, txt_name = name.split("/", 1)
+                            # 查找对应书籍目录
+                            for i in range(self.tree.topLevelItemCount()):
+                                user_item = self.tree.topLevelItem(i)
+                                for j in range(user_item.childCount()):
+                                    book_item = user_item.child(j)
+                                    bdata = book_item.data(0, Qt.ItemDataRole.UserRole)
+                                    if not bdata or bdata["bookId"] != bid:
+                                        continue
+                                    u_path = bdata.get("userId", uid)
+                                    book_dir = Path(self._qd_dir) / u_path / bid
+                                    chapter_id = txt_name.replace(".txt", "")
+                                    # 用有序章节名重命名输出文件
+                                    name_map = _load_chapter_names(book_dir, bid)
+                                    entry = name_map.get(chapter_id, None)
+                                    if entry:
+                                        order_num, ch_name = entry
+                                        safe_name = _sanitize_filename(ch_name)
+                                        digits = name_map.get("_digits", 0)
+                                        out_name = f"{order_num:0{digits}d}. {safe_name}.txt" if digits else txt_name
+                                    else:
+                                        out_name = txt_name
+                                    out_path = book_dir / out_name
+                                    # 同名防覆盖
+                                    counter = 1
+                                    while out_path.exists():
+                                        out_path = book_dir / f"{out_path.stem}_{counter}.txt"
+                                        counter += 1
+                                    out_path.write_bytes(zf.read(name))
+                                    success += 1
+                                    by_book.setdefault(bid, 0)
+                                    by_book[bid] += 1
+                                    self._sig.log.emit(f"✅ {out_name}")
+                                    break
+                        elif name.endswith("_errors.json"):
+                            try:
+                                errors = json.loads(zf.read(name))
+                                failed = len(errors)
+                                self._sig.log.emit(f"⚠️ {failed} 章解密失败")
+                            except Exception:
+                                pass
 
-                txt_count = len(list(Path(extract_dir).rglob("*.txt")))
+                by_book_str = ", ".join(f"{k}: {v}章" for k, v in by_book.items())
+                self._pending_open_dir = self._qd_dir
                 self._sig.decrypt_done.emit(
-                    f"✅ 解密完成！{txt_count} 个文件\n"
-                    f"📁 {extract_dir}"
+                    f"✅ 解密完成！{success} 成功, {failed} 失败\n📁 {by_book_str}"
                 )
             except Exception as e:
                 self._sig.error.emit(str(e))
@@ -655,12 +707,97 @@ class QDDecryptPanel(QWidget):
     def _on_decrypt_done(self, msg: str):
         self._append_log(msg)
         self._set_busy(False)
-        # 自动打开目录
         try:
-            import subprocess
-            subprocess.Popen(["explorer", msg.split("📁 ")[-1].strip()])
+            folder = self._pending_open_dir or self._qd_dir
+            if folder:
+                os.startfile(folder)
         except Exception:
             pass
+
+    # ── 合并已解密 ──────────────────────────────────────────────────
+
+    def _do_merge(self):
+        base_dir = self._qd_dir or str(Path(__file__).resolve().parent.parent.parent.parent / "qd_files")
+        include_metadata = not self.chk_no_copyright.isChecked()
+        include_toc = self.chk_include_toc.isChecked()
+        self._set_busy(True, "合并中...")
+
+        def _run():
+            try:
+                # 扫描所有书籍目录下的 .txt 文件，按书名合并
+                base = Path(base_dir)
+                merged_dir = base.parent / "merged"
+                merged_dir.mkdir(parents=True, exist_ok=True)
+
+                book_groups = {}  # book_name → [txt_path]
+                for user_dir in sorted(base.iterdir()):
+                    if not user_dir.is_dir():
+                        continue
+                    for book_dir in sorted(user_dir.iterdir()):
+                        if not book_dir.is_dir():
+                            continue
+                        book_id = book_dir.name
+                        if not book_id.isdigit():
+                            continue
+                        tz_files = sorted(book_dir.glob("*.txt"))
+                        if not tz_files:
+                            continue
+
+                        # 跳过 0. 目录.txt 和 -10000.txt
+                        tz_files = [f for f in tz_files
+                                    if not f.name.startswith("0. ") and f.stem != "-10000"]
+
+                        if not tz_files:
+                            continue
+
+                        book_name = self._get_book_name(book_dir, book_id) or f"书籍{book_id}"
+                        book_groups.setdefault(book_name, []).extend(tz_files)
+
+                total_merged = 0
+                for book_name, txt_files in sorted(book_groups.items()):
+                    safe_name = _sanitize_filename(book_name)
+                    out_path = merged_dir / f"{safe_name}.txt"
+                    lines = []
+                    if include_toc:
+                        lines.append(f"《{book_name}》")
+                        lines.append("=" * 40)
+                        for tf in txt_files:
+                            chapter_title = tf.stem
+                            # 去掉序号前缀，只保留章节名
+                            title_clean = re.sub(r"^\d+\.\s*", "", chapter_title)
+                            lines.append(f"  {title_clean}")
+                        lines.append("=" * 40)
+                        lines.append("")
+
+                    current_content = []
+                    for tf in txt_files:
+                        text = tf.read_text("utf-8", errors="replace")
+                        if not include_metadata:
+                            # 尝试去掉首部版权信息（前 3 行含"版权所有"、"本书来自"等）
+                            tlines = text.splitlines()
+                            clean_start = 0
+                            for i, tl in enumerate(tlines[:10]):
+                                if any(kw in tl for kw in ["版权所有", "本书来自", "www", ".com", "免责"]):
+                                    clean_start = i + 1
+                                else:
+                                    break
+                            text = "\n".join(tlines[clean_start:]).strip()
+                        current_content.append(text)
+
+                    merged_text = "\n\n".join(current_content)
+                    out_path.write_text(merged_text, encoding="utf-8")
+                    total_merged += len(txt_files)
+
+                self._pending_open_dir = str(merged_dir)
+                self._sig.decrypt_done.emit(
+                    f"✅ 合并完成！共 {total_merged} 章保存到:\n📁 {merged_dir}"
+                )
+            except Exception as e:
+                import traceback
+                self._sig.error.emit(f"合并失败: {e}")
+                self._set_busy_from_thread(False)
+
+        threading.Thread(target=_run, daemon=True).start()
 
     # ── 配置管理 ────────────────────────────────────────────────────
 
@@ -702,6 +839,19 @@ class QDDecryptPanel(QWidget):
         if pool_b64:
             self.input_pool.setText(pool_b64)
 
+    def _apply_book_name(self, book_id: str, book_name: str):
+        for i in range(self.tree.topLevelItemCount()):
+            user_item = self.tree.topLevelItem(i)
+            for j in range(user_item.childCount()):
+                book_item = user_item.child(j)
+                bdata = book_item.data(0, Qt.ItemDataRole.UserRole)
+                if not bdata or not isinstance(bdata, dict):
+                    continue
+                if bdata.get("bookId") == book_id:
+                    book_item.setText(0, f"  📖 {book_name} ({book_id})")
+                    bdata["bookName"] = book_name
+                    return
+
     def _append_log(self, text: str):
         self.log_output.append(text)
 
@@ -710,11 +860,7 @@ class QDDecryptPanel(QWidget):
         self.btn_pull.setText("拉取中..." if busy else "  📱 拉取书籍")
         if not busy:
             self._update_selected_count()
-        # 强制刷新 UI
         QTimer.singleShot(10, lambda: None)
 
     def _set_busy_from_thread(self, busy: bool):
-        """Safely request busy-state changes from a worker thread."""
         self._sig.busy_changed.emit(busy)
-
-    # 按钮样式由全局 QSS 控制

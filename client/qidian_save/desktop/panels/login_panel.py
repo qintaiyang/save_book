@@ -8,6 +8,17 @@ from PyQt6.QtCore import Qt, QObject, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont
 
 
+def _friendly_error(msg: str) -> str:
+    """将服务端错误消息转为用户友好的中文提示"""
+    if "LOGIN_BAD_CREDENTIALS" in msg:
+        return "邮箱或密码错误"
+    if "REGISTER_USER_ALREADY_EXISTS" in msg:
+        return "该邮箱已注册"
+    if "429" in msg:
+        return "请求过于频繁，请稍后再试"
+    return msg
+
+
 class _LoginSignal(QObject):
     login_success = pyqtSignal(str)
     login_error = pyqtSignal(str)
@@ -23,9 +34,9 @@ class LoginPanel(QWidget):
         self.on_login_success = on_login_success
         self._sig = _LoginSignal()
         self._sig.login_success.connect(self._on_login_success)
-        self._sig.login_error.connect(lambda e: self._set_status(f"登录失败: {e}", error=True))
+        self._sig.login_error.connect(self._on_login_error)
         self._sig.register_ready.connect(self._on_register_ready)
-        self._sig.register_error.connect(lambda e: self._set_status(f"注册失败: {e}", error=True))
+        self._sig.register_error.connect(lambda e: self._set_status(f"注册失败: {_friendly_error(e)}", error=True))
         self._sig.status_update.connect(self._set_status)
         self._init_ui()
 
@@ -205,6 +216,10 @@ class LoginPanel(QWidget):
     def _on_login_success(self, token: str):
         self.btn_login.setEnabled(True)
         self.on_login_success(token)
+
+    def _on_login_error(self, msg: str):
+        self.btn_login.setEnabled(True)
+        self._set_status(f"登录失败: {_friendly_error(msg)}", error=True)
 
     # ── Register ──
 
