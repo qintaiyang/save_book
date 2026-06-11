@@ -1,10 +1,10 @@
 """用量查询面板 — 显示今日用量 + 套餐信息"""
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QFrame, QProgressBar, QMessageBox,
+    QProgressBar,
 )
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont
+from ..components import PageHeader, StatCard, SurfaceCard, configure_page_layout
 
 
 class UsagePanel(QWidget):
@@ -15,70 +15,33 @@ class UsagePanel(QWidget):
         self._init_ui()
 
     def _init_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout = configure_page_layout(self)
+        layout.addWidget(PageHeader(
+            "用量查询", "查看今日章节额度与下次重置时间", "ACCOUNT USAGE"
+        ))
 
-        card = QFrame()
-        card.setObjectName("card")
-        card.setStyleSheet("""
-            QFrame#card {
-                background: white; border-radius: 16px;
-                padding: 40px; max-width: 500px;
-            }
-        """)
-        card.setFixedWidth(500)
+        card = SurfaceCard()
+        card.setMaximumWidth(760)
         cl = QVBoxLayout(card)
+        cl.setContentsMargins(24, 22, 24, 22)
         cl.setSpacing(20)
 
-        title = QLabel("  用量查询")
-        title.setProperty("widget-type", "panel-title")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        cl.addWidget(title)
-
-        # Usage ring/progress
         self.progress = QProgressBar()
         self.progress.setMinimum(0)
         self.progress.setMaximum(100)
         self.progress.setTextVisible(True)
         self.progress.setFixedHeight(24)
-        self.progress.setStyleSheet("""
-            QProgressBar {
-                border: none; border-radius: 12px;
-                background: #e5e7eb; height: 24px;
-                text-align: center; font-size: 12px;
-                font-weight: bold; color: #374151;
-            }
-            QProgressBar::chunk {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #3b82f6, stop:1 #10b981);
-                border-radius: 12px;
-            }
-        """)
         cl.addWidget(self.progress)
 
         # Stat cards
         stats = QHBoxLayout()
         stats.setSpacing(16)
 
-        for label, color in [("已用", "#3b82f6"), ("剩余", "#10b981"), ("限额", "#f59e0b")]:
-            box = QFrame()
-            box.setStyleSheet(f"""
-                background: {color}10; border-radius: 10px;
-                border: 1px solid {color}30; padding: 16px;
-            """)
-            bl = QVBoxLayout(box)
-            bl.setSpacing(4)
-            lbl = QLabel(label)
-            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl.setStyleSheet("font-size: 12px; color: #6b7280; font-weight: 600;")
-            bl.addWidget(lbl)
-
-            val = QLabel("--")
-            val.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            val.setStyleSheet(f"font-size: 28px; font-weight: bold; color: {color};")
-            self._stat_labels[label] = val
-            bl.addWidget(val)
-
+        for label, accent in [("已用", "accent"), ("剩余", "success"), ("限额", "neutral")]:
+            box = StatCard(label, "--", accent)
+            box.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            box.value.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._stat_labels[label] = box.value
             stats.addWidget(box, 1)
 
         cl.addLayout(stats)
@@ -92,11 +55,16 @@ class UsagePanel(QWidget):
 
         # Reset time
         self.label_reset = QLabel("")
-        self.label_reset.setStyleSheet("font-size: 12px; color: #9ca3af;")
+        self.label_reset.setProperty("ui-role", "status")
         self.label_reset.setAlignment(Qt.AlignmentFlag.AlignCenter)
         cl.addWidget(self.label_reset)
 
-        layout.addWidget(card)
+        centered = QHBoxLayout()
+        centered.addStretch()
+        centered.addWidget(card, 1)
+        centered.addStretch()
+        layout.addLayout(centered)
+        layout.addStretch()
 
         # Auto refresh on init
         self._refresh()

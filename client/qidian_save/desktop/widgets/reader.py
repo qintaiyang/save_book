@@ -1,33 +1,18 @@
 """文本阅读器组件 — 分页/滚动 + 字体控制 + 暗色模式"""
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton,
-    QLabel, QSlider, QFrame,
+    QLabel,
 )
-from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QTextOption
+from ..components import SurfaceCard
 
 
 class Reader(QWidget):
     """纯文本阅读器，支持字体大小调节和暗色切换"""
 
-    MODE_LIGHT = """
-        QTextEdit {
-            background: #fafafa; color: #1f2937;
-            border: none; padding: 24px 32px;
-            line-height: 1.8; selection-background-color: #bfdbfe;
-        }
-    """
-    MODE_DARK = """
-        QTextEdit {
-            background: #1a1a2e; color: #e2e8f0;
-            border: none; padding: 24px 32px;
-            line-height: 1.8; selection-background-color: #3b82f6;
-        }
-    """
-
     def __init__(self):
         super().__init__()
-        self._dark_mode = False
         self._font_size = 16
         self._init_ui()
 
@@ -37,11 +22,8 @@ class Reader(QWidget):
         layout.setSpacing(0)
 
         # Toolbar
-        toolbar = QFrame()
-        toolbar.setStyleSheet("""
-            background: white; border-bottom: 1px solid #e5e7eb;
-            padding: 8px 16px;
-        """)
+        toolbar = SurfaceCard()
+        toolbar.setProperty("ui-role", "reader-toolbar")
         toolbar.setFixedHeight(48)
         tr = QHBoxLayout(toolbar)
         tr.setContentsMargins(16, 4, 16, 4)
@@ -51,30 +33,22 @@ class Reader(QWidget):
 
         self.btn_font_smaller = QPushButton("A−")
         self.btn_font_smaller.setFixedSize(32, 28)
-        self.btn_font_smaller.setStyleSheet("border: 1px solid #d1d5db; border-radius: 4px; font-size: 12px;")
+        self.btn_font_smaller.setProperty("btn-type", "secondary")
         self.btn_font_smaller.clicked.connect(lambda: self._adjust_font(-2))
         tr.addWidget(self.btn_font_smaller)
 
         self.btn_font_larger = QPushButton("A+")
         self.btn_font_larger.setFixedSize(32, 28)
-        self.btn_font_larger.setStyleSheet("border: 1px solid #d1d5db; border-radius: 4px; font-size: 14px;")
+        self.btn_font_larger.setProperty("btn-type", "secondary")
         self.btn_font_larger.clicked.connect(lambda: self._adjust_font(2))
         tr.addWidget(self.btn_font_larger)
 
         tr.addSpacing(20)
 
-        self.btn_theme = QPushButton("🌙 暗色")
-        self.btn_theme.setStyleSheet("""
-            border: 1px solid #d1d5db; border-radius: 6px;
-            padding: 4px 12px; font-size: 12px;
-        """)
-        self.btn_theme.clicked.connect(self._toggle_theme)
-        tr.addWidget(self.btn_theme)
-
         tr.addStretch()
 
         self.label_info = QLabel("")
-        self.label_info.setStyleSheet("font-size: 11px; color: #9ca3af;")
+        self.label_info.setProperty("ui-role", "status")
         tr.addWidget(self.label_info)
 
         layout.addWidget(toolbar)
@@ -82,8 +56,8 @@ class Reader(QWidget):
         # Text area
         self.text_edit = QTextEdit()
         self.text_edit.setReadOnly(True)
+        self.text_edit.setProperty("ui-role", "reader-content")
         self.text_edit.setWordWrapMode(QTextOption.WrapMode.WordWrap)
-        self.text_edit.setStyleSheet(self.MODE_LIGHT)
         self.text_edit.setFont(QFont("Microsoft YaHei", self._font_size))
         self.text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         layout.addWidget(self.text_edit, 1)
@@ -97,15 +71,6 @@ class Reader(QWidget):
     def _adjust_font(self, delta: int):
         self._font_size = max(10, min(36, self._font_size + delta))
         self.text_edit.setFont(QFont("Microsoft YaHei", self._font_size))
-
-    def _toggle_theme(self):
-        self._dark_mode = not self._dark_mode
-        if self._dark_mode:
-            self.text_edit.setStyleSheet(self.MODE_DARK)
-            self.btn_theme.setText("☀️ 亮色")
-        else:
-            self.text_edit.setStyleSheet(self.MODE_LIGHT)
-            self.btn_theme.setText("🌙 暗色")
 
     def clear(self):
         self.text_edit.clear()

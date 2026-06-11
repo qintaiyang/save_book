@@ -11,6 +11,7 @@ from PyQt6.QtCore import Qt, QObject, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QIcon
 
 from ...zip_utils import safe_extract_zip
+from ..components import PageHeader, SurfaceCard, configure_page_layout
 
 
 # ── 工具函数（无解密逻辑） ─────────────────────────────────────────
@@ -87,18 +88,22 @@ class QDDecryptPanel(QWidget):
     # ── UI ──────────────────────────────────────────────────────────
 
     def _init_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 16, 20, 16)
-        layout.setSpacing(10)
+        layout = configure_page_layout(self, margins=(24, 20, 24, 20), spacing=12)
+        layout.addWidget(PageHeader(
+            ".qd 解密",
+            "连接设备、拉取章节并上传服务端完成解密",
+            "DEVICE WORKSPACE",
+        ))
 
         # ── 顶部：状态 + 操作按钮 ──
-        top = QFrame()
-        top.setStyleSheet("background: white; border-radius: 10px; padding: 14px;")
+        top = SurfaceCard()
         tr = QHBoxLayout(top)
+        tr.setContentsMargins(16, 12, 16, 12)
         tr.setSpacing(10)
 
-        self.label_device = QPushButton("⏳ 检测 ADB...")
-        self.label_device.setStyleSheet("font-size: 13px; padding: 4px 8px; border: none; text-align: left; background: transparent;")
+        self.label_device = QPushButton("检测 ADB...")
+        self.label_device.setProperty("btn-type", "ghost")
+        self.label_device.setProperty("status", "pending")
         self.label_device.setCursor(Qt.CursorShape.PointingHandCursor)
         self.label_device.clicked.connect(self._check_device)
         tr.addWidget(self.label_device)
@@ -106,9 +111,6 @@ class QDDecryptPanel(QWidget):
         self.input_device = QComboBox()
         self.input_device.setMinimumWidth(200)
         self.input_device.setFixedHeight(34)
-        self.input_device.setStyleSheet(
-            "padding: 2px 4px; font-size: 13px; border: 1px solid #d0d0d0; border-radius: 6px;"
-        )
         tr.addWidget(self.input_device)
 
         self.btn_pull = QPushButton("  拉取书籍")
@@ -135,27 +137,13 @@ class QDDecryptPanel(QWidget):
         layout.addWidget(top)
 
         # ── 中部：书籍 + 章节列表 ──
-        center = QFrame()
-        center.setStyleSheet("background: white; border-radius: 10px;")
+        center = SurfaceCard()
         cl = QVBoxLayout(center)
         cl.setContentsMargins(0, 0, 0, 0)
 
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["书名 / 章节", "状态", "大小"])
         self.tree.setAlternatingRowColors(True)
-        self.tree.setStyleSheet("""
-            QTreeWidget {
-                border: none; border-radius: 10px;
-                font-size: 13px;
-            }
-            QTreeWidget::item { padding: 6px 10px; }
-            QTreeWidget::item:selected { background: #eff6ff; color: #1f2937; }
-            QHeaderView::section {
-                background: #f8fafc; border: none;
-                padding: 8px 10px; font-weight: bold;
-                font-size: 12px; color: #64748b;
-            }
-        """)
         self.tree.setColumnCount(3)
         h = self.tree.header()
         h.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
@@ -169,20 +157,23 @@ class QDDecryptPanel(QWidget):
         layout.addWidget(center, 1)
 
         # ── 底部：操作按钮 + 日志 ──
-        bottom = QFrame()
-        bottom.setStyleSheet("background: white; border-radius: 10px; padding: 10px;")
+        bottom = SurfaceCard()
         bl = QVBoxLayout(bottom)
-        bl.setSpacing(6)
+        bl.setContentsMargins(16, 14, 16, 14)
+        bl.setSpacing(10)
 
         action_row = QHBoxLayout()
 
         # 参数区域
-        params_row = QHBoxLayout()
-        params_row.setSpacing(6)
+        qimei_row = QHBoxLayout()
+        qimei_row.setSpacing(8)
         self.input_qimei = QLineEdit()
         self.input_qimei.setPlaceholderText("QIMEI36（未设置则跳过解密）")
-        params_row.addWidget(self.input_qimei, 1)
+        qimei_row.addWidget(self.input_qimei, 1)
+        bl.addLayout(qimei_row)
 
+        params_row = QHBoxLayout()
+        params_row.setSpacing(8)
         self.input_pool = QLineEdit()
         self.input_pool.setPlaceholderText("Pool")
         params_row.addWidget(self.input_pool, 1)
@@ -206,7 +197,7 @@ class QDDecryptPanel(QWidget):
         bl.addLayout(params_row)
 
         self.btn_decrypt = QPushButton("  上传解密选中章节")
-        self.btn_decrypt.setProperty("btn-type", "secondary")
+        self.btn_decrypt.setProperty("btn-type", "primary")
         self.btn_decrypt.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_decrypt.setFixedHeight(40)
         self.btn_decrypt.setEnabled(False)
@@ -226,27 +217,27 @@ class QDDecryptPanel(QWidget):
         self.btn_merge.clicked.connect(self._do_merge)
         action_row.addWidget(self.btn_merge)
 
+        options_row = QHBoxLayout()
+        options_row.setSpacing(14)
+
         self.chk_no_copyright = QCheckBox("不含版权信息")
         self.chk_no_copyright.setChecked(True)
-        self.chk_no_copyright.setStyleSheet("font-size: 12px; color: #64748b;")
-        action_row.addWidget(self.chk_no_copyright)
+        options_row.addWidget(self.chk_no_copyright)
 
         self.chk_include_toc = QCheckBox("包含目录")
         self.chk_include_toc.setChecked(False)
-        self.chk_include_toc.setStyleSheet("font-size: 12px; color: #64748b;")
-        action_row.addWidget(self.chk_include_toc)
+        options_row.addWidget(self.chk_include_toc)
+        options_row.addStretch()
 
         action_row.addStretch()
         bl.addLayout(action_row)
+        bl.addSpacing(2)
+        bl.addLayout(options_row)
 
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
         self.log_output.setMaximumHeight(120)
-        self.log_output.setStyleSheet("""
-            border: 1px solid #e5e7eb; border-radius: 6px;
-            padding: 8px; font-size: 12px; color: #374151;
-            background: #fafafa;
-        """)
+        self.log_output.setProperty("ui-role", "technical-output")
         bl.addWidget(self.log_output)
 
         layout.addWidget(bottom)
@@ -286,27 +277,26 @@ class QDDecryptPanel(QWidget):
             real = [d for d in devices if "emulator" not in d["serial"]]
             if real:
                 text = f"✅ 真机已连接 ({real[0]['serial']})"
-                color = "#065f46"
+                status = "success"
             elif devices:
                 text = f"✅ 模拟器已连接 ({devices[0]['serial']})"
-                color = "#065f46"
+                status = "success"
             else:
                 text = "❌ 未检测到设备（点击重试）"
-                color = "#dc2626"
+                status = "error"
             self.label_device.setText(text)
-            self.label_device.setStyleSheet(
-                f"font-size: 13px; padding: 4px 8px; border: none; text-align: left; background: transparent; color: {color};"
-            )
+            self._set_device_status(status)
         except FileNotFoundError:
             self.label_device.setText("❌ 未找到 adb（点击重试）")
-            self.label_device.setStyleSheet(
-                "font-size: 13px; padding: 4px 8px; border: none; text-align: left; background: transparent; color: #dc2626;"
-            )
+            self._set_device_status("error")
         except Exception as e:
             self.label_device.setText(f"❌ ADB 异常: {str(e)[:40]}")
-            self.label_device.setStyleSheet(
-                "font-size: 13px; padding: 4px 8px; border: none; text-align: left; background: transparent; color: #dc2626;"
-            )
+            self._set_device_status("error")
+
+    def _set_device_status(self, status: str):
+        self.label_device.setProperty("status", status)
+        self.label_device.style().unpolish(self.label_device)
+        self.label_device.style().polish(self.label_device)
 
     def _qd_default_dir(self) -> str:
         """获取 qd_files 默认路径"""
@@ -484,19 +474,19 @@ class QDDecryptPanel(QWidget):
             user_books.setdefault(uid, []).append(b)
 
         for uid, ub in user_books.items():
-            user_item = QTreeWidgetItem([f"  👤 用户 {uid}", f"{len(ub)} 本书", ""])
+            user_item = QTreeWidgetItem([f"用户 {uid}", f"{len(ub)} 本书", ""])
             user_item.setData(0, Qt.ItemDataRole.UserRole, ("user", uid))
             user_item.setChildIndicatorPolicy(QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator)
             user_item.setExpanded(True)
 
             for b in ub:
-                book_item = QTreeWidgetItem([f"  📖 {b['bookName']} ({b['bookId']})", f"{b['total']} 章", ""])
+                book_item = QTreeWidgetItem([f"{b['bookName']} ({b['bookId']})", f"{b['total']} 章", ""])
                 book_item.setData(0, Qt.ItemDataRole.UserRole, b)
                 book_item.setChildIndicatorPolicy(QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator)
 
                 for ch in b["chapters"]:
                     size_kb = ch.get("size", 0) // 1024
-                    ch_item = QTreeWidgetItem([f"  📄 {ch['name']}", ch["id"], f"{size_kb}KB"])
+                    ch_item = QTreeWidgetItem([ch["name"], ch["id"], f"{size_kb}KB"])
                     ch_item.setData(0, Qt.ItemDataRole.UserRole, ("chapter", b["bookId"], ch))
                     ch_item.setFlags(ch_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                     ch_item.setCheckState(0, Qt.CheckState.Unchecked)
@@ -876,7 +866,7 @@ class QDDecryptPanel(QWidget):
                 if not bdata or not isinstance(bdata, dict):
                     continue
                 if bdata.get("bookId") == book_id:
-                    book_item.setText(0, f"  📖 {book_name} ({book_id})")
+                    book_item.setText(0, f"{book_name} ({book_id})")
                     bdata["bookName"] = book_name
                     return
 

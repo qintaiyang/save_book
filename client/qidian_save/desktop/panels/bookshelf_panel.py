@@ -2,11 +2,13 @@
 import threading, sys
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QTableWidget, QTableWidgetItem, QHeaderView, QLabel, QFrame,
+    QTableWidget, QTableWidgetItem, QHeaderView, QLabel,
 )
 from PyQt6.QtCore import Qt, QObject, pyqtSignal
 from PyQt6.QtGui import QFont, QColor
 from ...qidian_client import get_bookshelf, load_cookies
+from ..components import PageHeader, SurfaceCard, configure_page_layout
+from ..theme import DARK_TOKENS
 
 
 class _BookshelfSignal(QObject):
@@ -28,22 +30,17 @@ class BookshelfPanel(QWidget):
         self._init_ui()
 
     def _init_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(32, 24, 32, 24)
-        layout.setSpacing(16)
-
-        header = QLabel("我的书架")
-        header.setProperty("widget-type", "panel-title")
-        layout.addWidget(header)
-
-        desc = QLabel("需要先进行起点扫码登录，才能在书架中看到已购买的书籍")
-        desc.setStyleSheet("font-size: 13px; color: #6b7280;")
-        layout.addWidget(desc)
+        layout = configure_page_layout(self)
+        layout.addWidget(PageHeader(
+            "我的书架",
+            "扫码登录后可查看账号书架并选择书籍备份",
+            "QIDIAN LIBRARY",
+        ))
 
         # Toolbar
-        toolbar = QFrame()
-        toolbar.setStyleSheet("background: white; border-radius: 12px; padding: 12px 20px;")
+        toolbar = SurfaceCard()
         tr = QHBoxLayout(toolbar)
+        tr.setContentsMargins(18, 12, 18, 12)
         tr.setSpacing(12)
 
         self.btn_refresh = QPushButton("  刷新书架")
@@ -54,14 +51,13 @@ class BookshelfPanel(QWidget):
 
         tr.addStretch()
         self.status_label = QLabel("点击「刷新书架」加载")
-        self.status_label.setStyleSheet("font-size: 12px; color: #9ca3af;")
+        self.status_label.setProperty("ui-role", "status")
         tr.addWidget(self.status_label)
 
         layout.addWidget(toolbar)
 
         # Books table
-        table_frame = QFrame()
-        table_frame.setStyleSheet("background: white; border-radius: 12px;")
+        table_frame = SurfaceCard()
 
         tl = QVBoxLayout(table_frame)
         tl.setContentsMargins(0, 0, 0, 0)
@@ -86,7 +82,7 @@ class BookshelfPanel(QWidget):
         layout.addWidget(table_frame, 1)
 
         self.status_extra = QLabel("")
-        self.status_extra.setStyleSheet("font-size: 12px; color: #9ca3af;")
+        self.status_extra.setProperty("ui-role", "status")
         layout.addWidget(self.status_extra)
 
     def _load_bookshelf(self):
@@ -120,7 +116,7 @@ class BookshelfPanel(QWidget):
             self.table.setItem(i, 2, QTableWidgetItem(b["authorName"]))
 
             item = QTableWidgetItem("查看详情 →")
-            item.setForeground(QColor("#007aff"))
+            item.setForeground(QColor(DARK_TOKENS["accent_highlight"]))
             item.setFont(QFont("Microsoft YaHei", 12, QFont.Weight.Bold))
             self.table.setItem(i, 3, item)
 
