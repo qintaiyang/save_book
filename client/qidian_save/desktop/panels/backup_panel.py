@@ -1,14 +1,16 @@
 """在线备份面板 — 任务进度 + 章节列表 + 下载"""
 import io, json, os, threading, time, zipfile
+from pathlib import Path
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QTableWidget, QTableWidgetItem, QHeaderView, QFrame,
+    QTableWidget, QTableWidgetItem, QHeaderView,
     QProgressBar, QMessageBox,
 )
 from PyQt6.QtCore import Qt, QObject, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont
 from ... import DATA_DIR
 from ...zip_utils import safe_extract_zip, sanitize_filename
+from ..components import PageHeader, SurfaceCard, configure_page_layout
 
 
 class _DownloadSignals(QObject):
@@ -62,58 +64,42 @@ class BackupPanel(QWidget):
         self._init_ui()
 
     def _init_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(32, 24, 32, 24)
-        layout.setSpacing(16)
-
-        header = QLabel("在线备份")
-        header.setProperty("widget-type", "panel-title")
-        layout.addWidget(header)
+        layout = configure_page_layout(self)
+        layout.addWidget(PageHeader(
+            "在线备份", "查看任务进度并下载已完成章节", "BACKUP TASK"
+        ))
 
         # Task info card
-        info_card = QFrame()
-        info_card.setStyleSheet("background: white; border-radius: 12px; padding: 20px;")
+        info_card = SurfaceCard()
         il = QVBoxLayout(info_card)
+        il.setContentsMargins(20, 18, 20, 18)
         il.setSpacing(8)
 
         self.label_book = QLabel("请先创建备份任务")
-        self.label_book.setStyleSheet("font-size: 16px; font-weight: bold; color: #1f2937;")
+        self.label_book.setProperty("ui-role", "section-title")
         il.addWidget(self.label_book)
 
         self.label_status = QLabel("")
-        self.label_status.setStyleSheet("font-size: 13px; color: #6b7280;")
+        self.label_status.setProperty("ui-role", "status")
         il.addWidget(self.label_status)
 
         # Progress bar
         progress_header = QHBoxLayout()
         progress_header.addWidget(QLabel("备份进度:"))
         self.label_progress_text = QLabel("0 / 0")
-        self.label_progress_text.setStyleSheet("font-size: 13px; color: #374151;")
+        self.label_progress_text.setProperty("ui-role", "status")
         progress_header.addWidget(self.label_progress_text)
         progress_header.addStretch()
         il.addLayout(progress_header)
 
         self.progress = QProgressBar()
-        self.progress.setStyleSheet("""
-            QProgressBar {
-                border: none; border-radius: 6px;
-                background: #e5e7eb; height: 12px; text-align: center;
-                font-size: 10px; color: #374151;
-            }
-            QProgressBar::chunk {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #3b82f6, stop:1 #10b981);
-                border-radius: 6px;
-            }
-        """)
         self.progress.setValue(0)
         il.addWidget(self.progress)
 
         layout.addWidget(info_card)
 
         # Chapters table
-        table_frame = QFrame()
-        table_frame.setStyleSheet("background: white; border-radius: 12px;")
+        table_frame = SurfaceCard()
         tl = QVBoxLayout(table_frame)
         tl.setContentsMargins(0, 0, 0, 0)
 
@@ -132,9 +118,9 @@ class BackupPanel(QWidget):
         layout.addWidget(table_frame, 1)
 
         # Bottom controls
-        controls = QFrame()
-        controls.setStyleSheet("background: white; border-radius: 12px; padding: 12px;")
+        controls = SurfaceCard()
         cr = QHBoxLayout(controls)
+        cr.setContentsMargins(16, 12, 16, 12)
 
         self.btn_refresh = QPushButton("  刷新")
         self.btn_refresh.setProperty("btn-type", "secondary")
@@ -143,17 +129,17 @@ class BackupPanel(QWidget):
         cr.addWidget(self.btn_refresh)
 
         self.btn_download_all = QPushButton("  下载全部")
-        self.btn_download_all.setProperty("btn-type", "secondary")
+        self.btn_download_all.setProperty("btn-type", "primary")
         self.btn_download_all.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_download_all.clicked.connect(self._download_all)
         cr.addWidget(self.btn_download_all)
 
         self.label_dl_progress = QLabel("")
-        self.label_dl_progress.setStyleSheet("font-size: 12px; color: #374151; padding: 0 8px;")
+        self.label_dl_progress.setProperty("ui-role", "status")
         cr.addWidget(self.label_dl_progress)
 
         self.btn_cleanup = QPushButton("  清理任务")
-        self.btn_cleanup.setProperty("btn-type", "secondary")
+        self.btn_cleanup.setProperty("btn-type", "danger")
         self.btn_cleanup.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_cleanup.clicked.connect(self._cleanup)
         cr.addWidget(self.btn_cleanup)
@@ -163,13 +149,15 @@ class BackupPanel(QWidget):
 
     def load_task(self, task_id: int, server_crawl: bool = True,
                   book_id: str = "", qd_cookies: dict = None,
-                  checked_indices: list = None):
+                  checked_indices: list = None,
+                  backup_options: dict = None):
         self._stop_polling()
         self.task_id = task_id
         self._server_crawl = server_crawl
         self._book_id = book_id
         self._qd_cookies = qd_cookies or {}
         self._checked_indices = checked_indices or []
+        self._backup_options = backup_options or {}
         self._crawling = False
         self.table.setRowCount(0)
         if server_crawl:
@@ -265,6 +253,17 @@ class BackupPanel(QWidget):
                     book_id=self._book_id, chapters=target,
                     qd_cookies=self._qd_cookies,
                     batch_size=50, delay=1.5,
+                    preview_enabled=self._backup_options.get(
+                        "preview_enabled", False
+                    ),
+                    merge_enabled=self._backup_options.get(
+                        "merge_enabled", False
+                    ),
+                    proxy_urls=self._backup_options.get("proxy_urls", []),
+                    proxy_rotate_every=self._backup_options.get(
+                        "proxy_rotate_every", 50
+                    ),
+                    book_name=cat.get("bookName", ""),
                     on_progress=_on_progress,
                     on_batch_done=_on_batch_done,
                 )
@@ -310,8 +309,14 @@ class BackupPanel(QWidget):
                 cname = ch.get("chapterName", cid)
                 has_html = ch.get("hasHtml", False)
                 try:
-                    safe_name = sanitize_filename(cname)
-                    if has_html:
+                    postprocess_text = bool(
+                        self._backup_options.get("preview_enabled")
+                        or self._backup_options.get("merge_enabled")
+                    )
+                    safe_name = (
+                        str(cid) if postprocess_text else sanitize_filename(cname)
+                    )
+                    if has_html and not postprocess_text:
                         content = self.client.download_chapter(
                             self.task_id, cid, format="html"
                         )
@@ -333,9 +338,64 @@ class BackupPanel(QWidget):
                     )
                 self._download_sig.progress.emit(success + failed, total)
 
+            try:
+                self._postprocess_server_download(chapters)
+            except Exception as e:
+                self._download_sig.error.emit(f"输出后处理失败: {e}")
             self._download_sig.finished.emit(success, failed)
 
         threading.Thread(target=_do, daemon=True).start()
+
+    def _postprocess_server_download(self, server_chapters: list[dict]):
+        options = getattr(self, "_backup_options", {})
+        if not options.get("preview_enabled") and not options.get("merge_enabled"):
+            return
+
+        from ...chapter_merge import merge_chapters
+        from ...chapter_preview import fetch_previews, merge_preview_text
+        from ...proxy import ProxyPool
+        from ...qidian_client import get_catalog as qidian_catalog
+
+        catalog = qidian_catalog(self._book_id, cookies=self._qd_cookies) or {}
+        chapters = catalog.get("chapters") or server_chapters
+        selected_ids = {
+            str(ch.get("chapterId"))
+            for ch in server_chapters
+            if ch.get("chapterId") is not None
+        }
+        if selected_ids:
+            chapters = [
+                chapter for chapter in chapters
+                if str(chapter.get("chapterId")) in selected_ids
+            ]
+
+        if options.get("preview_enabled"):
+            pool = ProxyPool(
+                options.get("proxy_urls", []),
+                rotate_every=options.get("proxy_rotate_every", 50),
+            )
+            previews = fetch_previews(
+                str(self._book_id),
+                chapters,
+                proxy_pool=pool,
+            )
+            for chapter_id, preview in previews.items():
+                path = Path(self._download_dir) / f"{chapter_id}.txt"
+                if not path.exists():
+                    continue
+                decoded = path.read_text(encoding="utf-8", errors="replace")
+                path.write_text(
+                    merge_preview_text(preview, decoded),
+                    encoding="utf-8",
+                )
+
+        if options.get("merge_enabled"):
+            book_name = (
+                catalog.get("bookName")
+                or self.task_info.get("bookName")
+                or "book"
+            )
+            merge_chapters(self._download_dir, book_name, chapters)
 
     def _on_dl_error(self, msg: str):
         """单次下载失败 — 追加到进度标签，不弹模态对话框"""

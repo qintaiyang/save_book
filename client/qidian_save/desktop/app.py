@@ -57,10 +57,7 @@ class LoginDialog(QDialog):
         self.setMinimumSize(500, 500)
         self.resize(520, 600)
         self.setModal(True)
-        # 应用全局 QSS 主题
-        qss = load_qss(Theme.LIGHT)
-        if qss:
-            self.setStyleSheet(qss)
+        self.setProperty("ui-role", "login-dialog")
         self._init_ui()
         self._try_auto_login()
 
@@ -115,16 +112,14 @@ class MainWindow(FluentWindow):
         self.client = client
         self.token = token
         self.current_task_id = None
-        self._current_theme = Theme.LIGHT
+        self._current_theme = Theme.DARK
+        self.setMinimumSize(1024, 680)
         self._sig = _MainSignals()
         self._sig.usage_ready.connect(self._on_usage_ready)
         self._setup_panels()
         self._setup_theme()
         self._setup_status_bar()
         self._start_usage_timer()
-
-        # 自动应用 QSS
-        self._apply_qss()
 
     # ── 子界面注册 ─────────────────────────────────────────
 
@@ -168,21 +163,23 @@ class MainWindow(FluentWindow):
 
     def _on_backup_started(self, task_id: int, server_crawl: bool = True,
                            book_id: str = "", qd_cookies: dict = None,
-                           checked_indices: list = None):
+                           checked_indices: list = None,
+                           backup_options: dict = None):
         self.current_task_id = task_id
-        self.panels["backup"].load_task(task_id, server_crawl, book_id, qd_cookies, checked_indices or [])
+        self.panels["backup"].load_task(
+            task_id,
+            server_crawl,
+            book_id,
+            qd_cookies,
+            checked_indices or [],
+            backup_options or {},
+        )
         self.switchTo(self.panels["backup"])
 
     # ── 主题 ───────────────────────────────────────────────
 
     def _setup_theme(self):
-        setTheme(self._current_theme)
         apply_design_tokens(self._current_theme)
-
-    def _apply_qss(self):
-        qss = load_qss(self._current_theme)
-        if qss:
-            self.setStyleSheet(qss)
 
     # ── 状态栏 ─────────────────────────────────────────────
 
@@ -208,6 +205,7 @@ class MainWindow(FluentWindow):
         # 用可点击容器让 NavigationInterface 接受
         container = QPushButton()
         container.setObjectName("statusBarBtn")
+        container.setProperty("ui-role", "navigation-status")
         container.setFixedHeight(36)
         container.setCursor(Qt.CursorShape.ArrowCursor)
         # 把 status_container 放进按钮里
@@ -252,10 +250,13 @@ def main():
 
     # 全局默认字体
     font = QFont(
-        DESIGN_TOKENS["font_family"],
+        DESIGN_TOKENS["qt_font_family"],
         int(DESIGN_TOKENS["font_size_body"].replace("px", ""))
     )
     app.setFont(font)
+    setTheme(Theme.DARK)
+    apply_design_tokens(Theme.DARK)
+    app.setStyleSheet(load_qss(Theme.DARK))
 
     # 初始化
     set_cookie_path()

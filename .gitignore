@@ -44,3 +44,9 @@ client/adb/extra/
 # Generated artifacts
 client/dist-exe/
 *.zip
+
+# Dev tooling artifacts
+.superpowers/
+
+# Downloaded/cached novel content
+client/merged/

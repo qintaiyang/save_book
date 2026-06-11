@@ -2,12 +2,14 @@
 import threading, sys
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton,
-    QTableWidget, QTableWidgetItem, QHeaderView, QLabel, QFrame,
+    QTableWidget, QTableWidgetItem, QHeaderView, QLabel,
     QMessageBox,
 )
 from PyQt6.QtCore import Qt, QObject, pyqtSignal
 from PyQt6.QtGui import QFont, QColor
 from ...qidian_client import search_books as qidian_search
+from ..components import PageHeader, SurfaceCard, configure_page_layout
+from ..theme import DARK_TOKENS
 
 
 class _SearchSignal(QObject):
@@ -29,18 +31,15 @@ class SearchPanel(QWidget):
         self._init_ui()
 
     def _init_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(32, 24, 32, 24)
-        layout.setSpacing(16)
-
-        header = QLabel("搜索书籍")
-        header.setProperty("widget-type", "panel-title")
-        layout.addWidget(header)
+        layout = configure_page_layout(self)
+        layout.addWidget(PageHeader(
+            "搜索书籍", "查找书名、作者或关键词并进入章节详情", "LIBRARY TOOLS"
+        ))
 
         # Search input row
-        search_bg = QFrame()
-        search_bg.setStyleSheet("background: white; border-radius: 12px; padding: 20px;")
+        search_bg = SurfaceCard()
         sr = QHBoxLayout(search_bg)
+        sr.setContentsMargins(18, 16, 18, 16)
         sr.setSpacing(12)
 
         self.input_keyword = QLineEdit()
@@ -50,7 +49,7 @@ class SearchPanel(QWidget):
         sr.addWidget(self.input_keyword, 1)
 
         self.btn_search = QPushButton("  搜索")
-
+        self.btn_search.setProperty("btn-type", "primary")
         self.btn_search.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_search.clicked.connect(self._do_search)
         sr.addWidget(self.btn_search)
@@ -58,8 +57,7 @@ class SearchPanel(QWidget):
         layout.addWidget(search_bg)
 
         # Results table
-        table_frame = QFrame()
-        table_frame.setStyleSheet("background: white; border-radius: 12px;")
+        table_frame = SurfaceCard()
 
         tl = QVBoxLayout(table_frame)
         tl.setContentsMargins(0, 0, 0, 0)
@@ -86,7 +84,7 @@ class SearchPanel(QWidget):
         layout.addWidget(table_frame, 1)
 
         self.status_label = QLabel("")
-        self.status_label.setStyleSheet("font-size: 12px; color: #9ca3af;")
+        self.status_label.setProperty("ui-role", "status")
         layout.addWidget(self.status_label)
 
     def _do_search(self):
@@ -125,7 +123,7 @@ class SearchPanel(QWidget):
             self.table.setItem(i, 2, QTableWidgetItem(r["authorName"]))
 
             item = QTableWidgetItem("查看详情 →")
-            item.setForeground(QColor("#007aff"))
+            item.setForeground(QColor(DARK_TOKENS["accent_highlight"]))
             item.setFont(QFont("Microsoft YaHei", 12, QFont.Weight.Bold))
             self.table.setItem(i, 3, item)
 

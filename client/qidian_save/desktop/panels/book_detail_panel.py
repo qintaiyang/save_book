@@ -2,18 +2,20 @@
 import threading, sys
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QTableWidget, QTableWidgetItem, QHeaderView, QFrame,
-    QCheckBox, QMessageBox, QApplication,
+    QTableWidget, QTableWidgetItem, QHeaderView,
+    QCheckBox, QMessageBox, QApplication, QLineEdit,
 )
 from PyQt6.QtCore import Qt, QObject, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont
 from ...qidian_client import get_catalog as qidian_catalog, load_cookies
+from ...proxy import parse_proxy_urls
+from ..components import PageHeader, SurfaceCard, configure_page_layout
 
 
 class _DetailSignal(QObject):
     catalog_ready = pyqtSignal(dict)
     catalog_error = pyqtSignal(str)
-    backup_done = pyqtSignal(int, bool, list)  # (task_id, is_server_crawl, checked_indices)
+    backup_done = pyqtSignal(int, bool, list, object)
     backup_failed = pyqtSignal(str)
     backup_finished = pyqtSignal()
     backup_warning = pyqtSignal(str)  # 可恢复的警告，不影响继续
@@ -39,37 +41,33 @@ class BookDetailPanel(QWidget):
         self._init_ui()
 
     def _init_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(32, 24, 32, 24)
-        layout.setSpacing(16)
-
-        header = QLabel("书籍详情")
-        header.setProperty("widget-type", "panel-title")
-        layout.addWidget(header)
+        layout = configure_page_layout(self)
+        layout.addWidget(PageHeader(
+            "书籍详情", "选择章节并创建在线或本地备份任务", "BOOK WORKSPACE"
+        ))
 
         # Book info card
-        info_card = QFrame()
-        info_card.setStyleSheet("background: white; border-radius: 12px; padding: 20px;")
+        info_card = SurfaceCard()
         info_layout = QVBoxLayout(info_card)
+        info_layout.setContentsMargins(20, 18, 20, 18)
         info_layout.setSpacing(6)
 
         self.label_title = QLabel("请先搜索并选择一本书")
-        self.label_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #1f2937;")
+        self.label_title.setProperty("ui-role", "section-title")
         info_layout.addWidget(self.label_title)
 
         self.label_author = QLabel("")
-        self.label_author.setStyleSheet("font-size: 13px; color: #6b7280;")
+        self.label_author.setProperty("ui-role", "muted")
         info_layout.addWidget(self.label_author)
 
         self.label_chapters = QLabel("")
-        self.label_chapters.setStyleSheet("font-size: 13px; color: #6b7280;")
+        self.label_chapters.setProperty("ui-role", "muted")
         info_layout.addWidget(self.label_chapters)
 
         layout.addWidget(info_card)
 
         # ── Catalog table ──
-        table_frame = QFrame()
-        table_frame.setStyleSheet("background: white; border-radius: 12px;")
+        table_frame = SurfaceCard()
 
         tl = QVBoxLayout(table_frame)
         tl.setContentsMargins(0, 0, 0, 0)
@@ -91,10 +89,39 @@ class BookDetailPanel(QWidget):
         tl.addWidget(self.table)
         layout.addWidget(table_frame, 1)
 
+        options = SurfaceCard()
+        option_layout = QVBoxLayout(options)
+        option_layout.setContentsMargins(18, 14, 18, 14)
+        option_layout.setSpacing(10)
+
+        option_title = QLabel("输出增强")
+        option_title.setProperty("ui-role", "section-title")
+        option_layout.addWidget(option_title)
+
+        option_row = QHBoxLayout()
+        option_row.setSpacing(16)
+        self.chk_preview = QCheckBox("补全公开试读")
+        self.chk_preview.setChecked(True)
+        option_row.addWidget(self.chk_preview)
+
+        self.chk_merge = QCheckBox("生成合并 TXT")
+        self.chk_merge.setChecked(True)
+        option_row.addWidget(self.chk_merge)
+        option_row.addStretch()
+        option_layout.addLayout(option_row)
+
+        self.proxy_input = QLineEdit()
+        self.proxy_input.setPlaceholderText(
+            "可选代理，逗号分隔，例如 http://127.0.0.1:7890"
+        )
+        self.proxy_input.setClearButtonEnabled(True)
+        option_layout.addWidget(self.proxy_input)
+        layout.addWidget(options)
+
         # ── Bottom controls: select-all + backup ──
-        controls = QFrame()
-        controls.setStyleSheet("background: white; border-radius: 12px; padding: 16px;")
+        controls = SurfaceCard()
         cr = QHBoxLayout(controls)
+        cr.setContentsMargins(18, 13, 18, 13)
         cr.setSpacing(12)
 
         self.btn_select_all = QPushButton("全选")
@@ -104,17 +131,16 @@ class BookDetailPanel(QWidget):
         cr.addWidget(self.btn_select_all)
 
         self.chk_server_crawl = QCheckBox("服务器抓取")
-        self.chk_server_crawl.setStyleSheet("font-size: 12px; color: #6b7280;")
         cr.addWidget(self.chk_server_crawl)
 
         self.label_selected = QLabel("已选 0 章")
-        self.label_selected.setStyleSheet("font-size: 13px; color: #6b7280;")
+        self.label_selected.setProperty("ui-role", "status")
         cr.addWidget(self.label_selected)
 
         cr.addStretch()
 
         self.btn_backup = QPushButton("  开始备份")
-        self.btn_backup.setProperty("btn-type", "secondary")
+        self.btn_backup.setProperty("btn-type", "primary")
         self.btn_backup.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_backup.clicked.connect(self._start_backup)
         cr.addWidget(self.btn_backup)
@@ -218,6 +244,14 @@ class BookDetailPanel(QWidget):
 
     # ── Backup ──
 
+    def _backup_options(self) -> dict:
+        return {
+            "preview_enabled": self.chk_preview.isChecked(),
+            "merge_enabled": self.chk_merge.isChecked(),
+            "proxy_urls": parse_proxy_urls(self.proxy_input.text()),
+            "proxy_rotate_every": 50,
+        }
+
     def _start_backup(self):
         if not self.book_id:
             QMessageBox.warning(self, "提示", "请先选择一本书")
@@ -245,6 +279,12 @@ class BookDetailPanel(QWidget):
         self.btn_backup.setText("创建任务...")
 
         server_crawl = self.chk_server_crawl.isChecked()
+        try:
+            backup_options = self._backup_options()
+        except ValueError as exc:
+            QMessageBox.warning(self, "代理配置错误", str(exc))
+            self._sig.backup_finished.emit()
+            return
 
         # Cookie 准备（主线程，可弹对话框）
         qd_cookies = load_cookies()
@@ -278,7 +318,9 @@ class BookDetailPanel(QWidget):
                                                       server_crawl=False,
                                                       chapter_ids=checked_indices)
                 task_id = result["taskId"]
-                self._sig.backup_done.emit(task_id, server_crawl, checked_indices)
+                self._sig.backup_done.emit(
+                    task_id, server_crawl, checked_indices, backup_options
+                )
             except Exception as e:
                 print(f"[detail] 备份创建异常: {e}", file=sys.stderr)
                 self._sig.backup_failed.emit(str(e))
@@ -291,6 +333,19 @@ class BookDetailPanel(QWidget):
         self.btn_backup.setEnabled(True)
         self.btn_backup.setText("  开始备份")
 
-    def _on_backup_done(self, task_id: int, server_crawl: bool, checked_indices: list):
+    def _on_backup_done(
+        self,
+        task_id: int,
+        server_crawl: bool,
+        checked_indices: list,
+        backup_options: dict,
+    ):
         qd_cookies = load_cookies()
-        self.on_backup_started(task_id, server_crawl, self.book_id, qd_cookies, checked_indices)
+        self.on_backup_started(
+            task_id,
+            server_crawl,
+            self.book_id,
+            qd_cookies,
+            checked_indices,
+            backup_options,
+        )

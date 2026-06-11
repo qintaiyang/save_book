@@ -15,6 +15,13 @@ from .adb_utils import (
 TOKEN_FILE = DATA_DIR / "token"
 
 
+def _positive_int(value: str) -> int:
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("必须是大于 0 的整数")
+    return number
+
+
 def _save_token(token: str):
     TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
     TOKEN_FILE.write_text(token, encoding="utf-8")
@@ -181,6 +188,11 @@ def _cmd_backup_local_crawl(args):
         client=client, task_id=task_id, book_id=args.book_id,
         chapters=target, qd_cookies=qd_cookies,
         output_dir=output_dir, batch_size=args.batch_size, delay=args.delay,
+        preview_enabled=args.preview,
+        merge_enabled=args.merge,
+        proxy_urls=args.proxy,
+        proxy_rotate_every=args.proxy_rotate_every,
+        book_name=book_name,
         on_progress=lambda c, t, m: (_on_progress(c, t, m), _on_progress_done(c, t, m))[1],
         on_batch_done=lambda count, msg: print(f"  {msg}"),
     )
@@ -197,7 +209,7 @@ def _cmd_backup_local_crawl(args):
     else:
         print(f"\n完成! 共 {success} 章保存到 {output_dir}")
 
-    print(f"\n{'完成' if all_ok else '警告'}! 结果保存到: {output_dir}")
+    print(f"\n{'完成' if failed == 0 else '警告'}! 结果保存到: {output_dir}")
 
 
 def cmd_backup(args):
@@ -596,6 +608,14 @@ def build_parser():
                           help="每批处理章节数（默认 50，仅客户端抓取模式）")
     p_backup.add_argument("--delay", type=float, default=1.5,
                           help="每章请求间隔秒数（默认 1.5，仅客户端抓取模式）")
+    p_backup.add_argument("--preview", action="store_true",
+                          help="并行获取公开试读并与服务端解码正文去重合并")
+    p_backup.add_argument("--merge", action="store_true",
+                          help="按目录和卷信息生成单文件 TXT")
+    p_backup.add_argument("--proxy", action="append", default=[],
+                          help="试读请求代理，可重复使用或逗号分隔")
+    p_backup.add_argument("--proxy-rotate-every", type=_positive_int, default=50,
+                          help="每个代理连续处理的请求数（默认 50）")
     p_backup.set_defaults(func=cmd_backup)
 
     p_dec = sub.add_parser("decrypt", help="解密 .qd 文件（单文件或整个目录）")
