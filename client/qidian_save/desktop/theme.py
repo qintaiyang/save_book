@@ -50,6 +50,12 @@ LIGHT_TOKENS = {
 }
 
 DARK_TOKENS = {
+    "bg_canvas":      "#1C191F",
+    "bg_navigation":  "#171419",
+    "surface_raised": "#29252E",
+    "surface_inset":  "#211E24",
+    "border_subtle":  "#3A3440",
+    "accent_highlight": "#C58BC2",
     "bg_primary":     "#1c1c1e",
     "bg_card":        "#2c2c2e",
     "bg_sidebar":     "#111111",
@@ -78,6 +84,8 @@ DARK_TOKENS = {
 }
 
 DESIGN_TOKENS = {
+    "control_height": 38,
+    "qt_font_family": "Microsoft YaHei UI",
     "radius_sm":      "6px",
     "radius_md":      "10px",
     "radius_lg":      "14px",
@@ -117,7 +125,7 @@ def get_token(theme: Theme, key: str) -> str:
     return tokens.get(key, "")
 
 
-def load_qss(theme: Theme) -> str:
+def load_qss(theme: Theme = Theme.DARK) -> str:
     """加载对应主题的 QSS 文件。"""
     import os
     mode = "dark" if theme == Theme.DARK else "light"

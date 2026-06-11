@@ -6,6 +6,30 @@ from qidian_save import cli
 
 
 class CliRegressionTests(unittest.TestCase):
+    def test_backup_parser_accepts_preview_merge_and_rotating_proxies(self):
+        args = cli.build_parser().parse_args([
+            "backup", "123",
+            "--preview",
+            "--merge",
+            "--proxy", "http://one.example:8080",
+            "--proxy", "socks5://two.example:1080",
+            "--proxy-rotate-every", "25",
+        ])
+        self.assertTrue(args.preview)
+        self.assertTrue(args.merge)
+        self.assertEqual(args.proxy, [
+            "http://one.example:8080",
+            "socks5://two.example:1080",
+        ])
+        self.assertEqual(args.proxy_rotate_every, 25)
+
+    def test_backup_parser_rejects_non_positive_proxy_rotation(self):
+        parser = cli.build_parser()
+        with self.assertRaises(SystemExit):
+            parser.parse_args([
+                "backup", "123", "--proxy-rotate-every", "0",
+            ])
+
     def test_cmd_decrypt_uses_path_import_and_reaches_file_check(self):
         args = argparse.Namespace(
             file="does-not-exist.qd",

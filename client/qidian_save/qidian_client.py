@@ -145,14 +145,31 @@ def get_catalog(book_id: str, cookies: dict = None) -> Optional[dict]:
             pd = data.get("pageContext", {}).get("pageProps", {}).get("pageData", {})
             book_name = pd.get("bookName", "")
             total_chapters = pd.get("chapterTotalCnt", 0)
-            for vol in pd.get("vs", []):
-                for ch in vol.get("cs", []):
+            for volume_index, vol in enumerate(pd.get("vs", [])):
+                volume_name = (
+                    vol.get("vN")
+                    or vol.get("volumeName")
+                    or vol.get("name")
+                    or f"第{volume_index + 1}卷"
+                )
+                volume_code = (
+                    vol.get("vId")
+                    or vol.get("volumeId")
+                    or vol.get("id")
+                    or volume_index
+                )
+                for chapter_index, ch in enumerate(vol.get("cs", [])):
                     chapters.append({
                         "chapterId": str(ch["id"]),
                         "chapterName": ch.get("cN", ""),
                         "isVip": ch.get("sS", 0) != 1,
                         "isBuy": ch.get("isBuy", False),
                         "wordCount": ch.get("cnt", 0),
+                        "volumeName": volume_name,
+                        "volumeCode": volume_code,
+                        "chapterOrder": len(chapters),
+                        "volumeOrder": volume_index,
+                        "orderInVolume": chapter_index,
                     })
         except Exception:
             chapters = []

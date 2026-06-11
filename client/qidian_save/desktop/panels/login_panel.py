@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QObject, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont
+from ..components import SurfaceCard
 
 
 def _friendly_error(msg: str) -> str:
@@ -46,6 +47,7 @@ class LoginPanel(QWidget):
 
         section = QFrame()
         section.setObjectName("section")
+        section.setProperty("ui-role", "login-card")
         section.setFixedWidth(520)
         sl = QVBoxLayout(section)
         sl.setSpacing(16)
@@ -102,7 +104,7 @@ class LoginPanel(QWidget):
         lf.addWidget(self.btn_login)
 
         self.btn_forgot = QPushButton("忘记密码？")
-        self.btn_forgot.setStyleSheet("font-size: 12px; color: #6b7280; border: none;")
+        self.btn_forgot.setProperty("btn-type", "ghost")
         self.btn_forgot.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_forgot.clicked.connect(self._forgot_password)
         lf.addWidget(self.btn_forgot)

@@ -1,12 +1,13 @@
 """起点扫码登录面板 — 二维码显示 + 轮询 + 公告"""
 import time, threading, sys, base64
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QPushButton, QLabel,
-    QFrame, QMessageBox, QTextEdit,
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
+    QMessageBox, QTextEdit,
 )
 from PyQt6.QtCore import Qt, QObject, pyqtSignal, QTimer
 from PyQt6.QtGui import QPixmap
 from ...qidian_client import get_qrcode, poll_qrcode, save_cookies
+from ..components import PageHeader, SurfaceCard, configure_page_layout
 
 
 class _QRSignal(QObject):
@@ -29,6 +30,7 @@ _PRIORITY_LABEL = {"urgent": "【紧急】", "important": "【重要】", "norma
 class QidianLoginPanel(QWidget):
     def __init__(self, client):
         super().__init__()
+        self.setProperty("ui-role", "feature-panel")
         self.client = client
         self.session_key = ""
         self._polling = False
@@ -43,7 +45,7 @@ class QidianLoginPanel(QWidget):
         self._sig.show_qr.connect(self._on_show_qr)
         self._sig.show_error.connect(self._on_error)
         self._sig.show_status.connect(lambda t: self.status_label.setText(t))
-        self._sig.show_info.connect(lambda t: self.info_display.setText(t))
+        self._sig.show_info.connect(self._show_info)
         self._sig.show_text.connect(lambda t: (
             self.label_qr.setText(t),
             self.label_qr.setTextFormat(Qt.TextFormat.AutoText),
@@ -55,53 +57,54 @@ class QidianLoginPanel(QWidget):
         self._sig.poll_timeout.connect(lambda: self.status_label.setText("扫码超时，请重试"))
 
     def _init_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout = configure_page_layout(self)
+        layout.addWidget(PageHeader(
+            "起点扫码", "使用起点 App 完成登录，Cookie 仅保存在本地", "ACCOUNT LINK"
+        ))
 
-        section = QFrame()
-        section.setObjectName("section")
-        section.setStyleSheet("""
-            QFrame#section { background: white; border-radius: 12px; padding: 32px; max-width: 520px; }
-        """)
+        section = SurfaceCard()
+        section.setMaximumWidth(620)
         sl = QVBoxLayout(section)
+        sl.setContentsMargins(26, 24, 26, 24)
         sl.setSpacing(16)
 
-        title = QLabel("起点扫码登录")
-        title.setStyleSheet("font-size: 20px; font-weight: bold; color: #1f2937;")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        sl.addWidget(title)
-
         self.label_qr = QLabel("点击下方按钮生成二维码，用起点 App 扫码")
-        self.label_qr.setStyleSheet("font-size: 13px; color: #6b7280;")
+        self.label_qr.setProperty("ui-role", "qr-stage")
         self.label_qr.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.label_qr.setMinimumHeight(280)
         self.label_qr.setWordWrap(True)
         sl.addWidget(self.label_qr)
 
         self.btn_generate = QPushButton("  生成二维码")
-        self.btn_generate.setProperty("btn-type", "secondary")
+        self.btn_generate.setProperty("btn-type", "primary")
         self.btn_generate.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_generate.clicked.connect(self._generate_qr)
         sl.addWidget(self.btn_generate)
 
         self.status_label = QLabel("")
-        self.status_label.setStyleSheet("font-size: 12px; color: #6b7280;")
+        self.status_label.setProperty("ui-role", "status")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sl.addWidget(self.status_label)
 
         self.info_display = QTextEdit()
         self.info_display.setReadOnly(True)
         self.info_display.setMaximumHeight(80)
-        self.info_display.setStyleSheet("""
-            border: 1px solid #e5e7eb; border-radius: 6px;
-            padding: 8px; font-size: 11px; color: #374151;
-            background: #f9fafb;
-        """)
+        self.info_display.setProperty("ui-role", "technical-output")
+        self.info_display.hide()
         sl.addWidget(self.info_display)
 
-        layout.addWidget(section)
+        row = QHBoxLayout()
+        row.addStretch()
+        row.addWidget(section, 1)
+        row.addStretch()
+        layout.addLayout(row)
+        layout.addStretch()
 
     # ── 公告 ──
+
+    def _show_info(self, text: str):
+        self.info_display.setText(text)
+        self.info_display.setVisible(bool(text))
 
     def _refresh_announcements(self):
         """拉取公告，显示在二维码区域（点击生成二维码后被二维码替换）"""
@@ -156,7 +159,7 @@ class QidianLoginPanel(QWidget):
             save_cookies(cookies)
             ywkey_preview = cookies.get("ywkey", "")[:8] + "..." if cookies.get("ywkey") else "N/A"
             self.status_label.setText("扫码成功!")
-            self.info_display.setText(
+            self._show_info(
                 f"ywguid: {cookies.get('ywguid', '')}\n"
                 f"ywkey: {ywkey_preview}\n"
                 f"Cookie 已保存到本地"
@@ -171,6 +174,7 @@ class QidianLoginPanel(QWidget):
         self.btn_generate.setText("生成中...")
         self.status_label.setText("正在获取二维码...")
         self.info_display.clear()
+        self.info_display.hide()
         # 重置二维码区域（清除公告文字）
         self.label_qr.clear()
         self.label_qr.setTextFormat(Qt.TextFormat.AutoText)
