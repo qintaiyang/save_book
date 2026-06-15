@@ -255,6 +255,7 @@ class MainWindow(FluentWindow):
         container = QPushButton()
         container.setObjectName("statusBarBtn")
         container.setProperty("ui-role", "navigation-status")
+        container.isSelectable = False
         container.setFixedHeight(36)
         container.setCursor(Qt.CursorShape.ArrowCursor)
         # 把 status_container 放进按钮里

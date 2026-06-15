@@ -7,6 +7,8 @@ from PyQt6.QtWidgets import QApplication
 
 from qidian_save.desktop.panels.qidian_login_panel import QidianLoginPanel
 
+_QT_APP = None
+
 
 class FakeClient:
     def get_announcements(self):
@@ -64,3 +66,16 @@ def test_main_window_debug_mode_registers_slow_backup_panel():
 
     window = MainWindow(FakeApiClient(), token="test-token", debug_mode=True)
     assert any(window.stackedWidget.widget(i) is window.panels["backup"] for i in range(window.stackedWidget.count()))
+
+
+def test_login_status_navigation_widget_is_not_selectable():
+    from qidian_save.desktop.app import MainWindow
+
+    global _QT_APP
+    _QT_APP = QApplication.instance() or QApplication([])
+    window = MainWindow(FakeApiClient(), token="test-token")
+    status_button = window.findChild(__import__("PyQt6.QtWidgets").QtWidgets.QPushButton, "statusBarBtn")
+
+    assert status_button is not None
+    assert hasattr(status_button, "isSelectable")
+    assert status_button.isSelectable is False
