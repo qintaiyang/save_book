@@ -6,6 +6,7 @@ import os
 import secrets
 import threading
 import urllib.parse
+import inspect
 
 from PyQt6.QtCore import QObject, QUrl, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QDesktopServices
@@ -196,6 +197,29 @@ class ApkLoginPanel(QWidget):
                 self._sig.error.emit(str(exc))
         threading.Thread(target=worker, daemon=True).start()
 
+    def _notify_session_authenticated(self, session_id: int, payload: dict):
+        if not self.on_session_authenticated:
+            return
+        try:
+            signature = inspect.signature(self.on_session_authenticated)
+            positional = [
+                param for param in signature.parameters.values()
+                if param.kind in (
+                    inspect.Parameter.POSITIONAL_ONLY,
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                )
+            ]
+            accepts_varargs = any(
+                param.kind == inspect.Parameter.VAR_POSITIONAL
+                for param in signature.parameters.values()
+            )
+            if accepts_varargs or len(positional) >= 2:
+                self.on_session_authenticated(session_id, payload)
+            else:
+                self.on_session_authenticated(session_id)
+        except (TypeError, ValueError):
+            self.on_session_authenticated(session_id)
+
     def _set_login_mode(self, mode: str):
         self._login_mode = mode
         is_phone = mode == "phone_code"
@@ -210,6 +234,17 @@ class ApkLoginPanel(QWidget):
             self.login_status.setText("状态：未开始。先填写手机号并发送短信验证码。")
         else:
             self.login_status.setText('状态：未开始。先填写账号密码，然后点击“检测账号”。')
+
+    def set_cached_authenticated_session(self, session_id: int):
+        self.session_id = int(session_id or 0)
+        if not self.session_id:
+            return
+        self._pending_stage = "authenticated"
+        self._close_captcha_popup()
+        self.login_status.setText("状态：已恢复登录，会话有效期内无需重新登录。")
+        self.challenge_hint.setText("现在可以去搜索书籍、查看书架或创建在线备份。")
+        self.sms_code_input.setEnabled(False)
+        self.btn_submit_sms.hide()
 
     # ---- captcha ----
 
@@ -384,8 +419,7 @@ class ApkLoginPanel(QWidget):
                 "现在可以去搜索书籍，"
                 "选择章节后创建在线备份。"
             )
-            if self.on_session_authenticated:
-                self.on_session_authenticated(self.session_id)
+            self._notify_session_authenticated(self.session_id, data)
         elif result and not result.get("ok"):
             message = str(result.get("message") or "验证码失败")
             self.login_status.setText(f"状态：{message}，登录未完成。")

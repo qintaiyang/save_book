@@ -6,7 +6,7 @@ from . import DATA_DIR
 from .zip_utils import safe_extract_zip, sanitize_filename
 from .qidian_client import search_books as qidian_search, get_catalog as qidian_catalog, get_bookshelf, load_cookies, set_cookie_path
 from .adb_utils import (
-    scan_device, pull_device_files, inspect_database, create_qd_zip,
+    scan_device, pull_device_files_auto, inspect_database, create_qd_zip,
     load_config, save_config, check_device, check_root, config_path,
     list_devices, extract_params,
 )
@@ -474,7 +474,7 @@ def cmd_adb_pull(args):
         return
 
     print(f"=== 拉取 .qd 文件 → {output} ===")
-    result = pull_device_files(output, device_serial=serial)
+    result = pull_device_files_auto(output, device_serial=serial)
     print(f"  拉取完成: {result['qdFiles']} 个 .qd 文件, {result['databases']} 个数据库")
     for u in result.get('users', []):
         print(f"    [{u['userId']}]: {u['count']} 个文件")
@@ -503,12 +503,10 @@ def cmd_adb_extract(args):
 
     print()
     qimei36 = result.get("qimei36", "")
-    user_id = result.get("userId", "")
     pool_b64 = result.get("pool_b64", "")
     errors = result.get("errors", [])
 
     print(f"  QIMEI36: [{'OK' if qimei36 else '--'}] {qimei36 if qimei36 else '未提取'}")
-    print(f"  userId:  [{'OK' if user_id else '--'}] {user_id if user_id else '未提取'}")
     print(f"  Pool:    [{'OK' if pool_b64 else '--'}] {pool_b64[:50] + '...' if pool_b64 else '未提取'}")
 
     if errors:
@@ -517,12 +515,10 @@ def cmd_adb_extract(args):
             print(f"   - {e}")
 
     # 保存到配置
-    if qimei36 or user_id or pool_b64:
+    if qimei36 or pool_b64:
         cfg = load_config()
         if qimei36:
             cfg["qimei36"] = qimei36
-        if user_id:
-            cfg["userId"] = user_id
         if pool_b64:
             cfg["pool_b64"] = pool_b64
         save_config(cfg)

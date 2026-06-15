@@ -9,6 +9,13 @@ from PyQt6.QtGui import QFont
 
 from ..api_client import QidianSaveClient
 from .. import DATA_DIR
+from ..apk_session_cache import (
+    APK_SESSION_CACHE_FILE,
+    clear_cached_session,
+    is_session_payload_reusable,
+    load_cached_session,
+    save_cached_session,
+)
 from ..qidian_client import set_cookie_path
 
 from qfluentwidgets import (
@@ -109,21 +116,29 @@ class _MainSignals(QObject):
 # ── 主窗口 ────────────────────────────────────────────────
 
 class MainWindow(FluentWindow):
-    def __init__(self, client: QidianSaveClient, token: str, debug_mode: bool = False):
+    def __init__(
+        self,
+        client: QidianSaveClient,
+        token: str,
+        debug_mode: bool = False,
+        apk_session_cache_path=APK_SESSION_CACHE_FILE,
+    ):
         super().__init__()
         self.client = client
         self.token = token
         self.debug_mode = bool(debug_mode)
+        self.apk_session_cache_path = apk_session_cache_path
         self.apk_session_id = 0
         self.current_task_id = None
         self.current_apk_target_ref = {}
         self._current_theme = Theme.DARK
-        self.setMinimumSize(1024, 680)
+        self.setMinimumSize(860, 600)
         self._sig = _MainSignals()
         self._sig.usage_ready.connect(self._on_usage_ready)
         self._setup_panels()
         self._setup_theme()
         self._setup_status_bar()
+        self._restore_cached_apk_session()
         self._start_usage_timer()
 
     # ── 子界面注册 ─────────────────────────────────────────
@@ -139,7 +154,11 @@ class MainWindow(FluentWindow):
         )
         self.panels["search"]   = SearchPanel(self.client, self._on_book_selected)
         self.panels["qrcode"]   = QidianLoginPanel(self.client)
-        self.panels["bookshelf"] = BookshelfPanel(self.client, self._on_book_selected)
+        self.panels["bookshelf"] = BookshelfPanel(
+            self.client,
+            self._on_book_selected,
+            get_apk_session_id=lambda: self.apk_session_id,
+        )
         self.panels["detail"]   = BookDetailPanel(
             self.client,
             self._on_backup_started,
@@ -202,13 +221,57 @@ class MainWindow(FluentWindow):
         )
         self.switchTo(self.panels["backup"])
 
-    def _on_apk_session_authenticated(self, session_id: int):
+    def _on_apk_session_authenticated(self, session_id: int, session_payload: dict | None = None):
         self.apk_session_id = int(session_id or 0)
+        self._cache_current_apk_session(session_payload)
         self._update_login_status_dot()
         # 也通知在线备份面板更新登录状态显示
         panel = self.panels.get("apk_backup")
         if panel and hasattr(panel, "set_login_online"):
             panel.set_login_online(bool(self.apk_session_id))
+        login_panel = self.panels.get("login")
+        if login_panel and hasattr(login_panel, "set_cached_authenticated_session"):
+            login_panel.set_cached_authenticated_session(self.apk_session_id)
+
+    def _cache_current_apk_session(self, session_payload: dict | None = None):
+        if not self.apk_session_id:
+            clear_cached_session(self.apk_session_cache_path)
+            return
+        payload = session_payload
+        if not isinstance(payload, dict):
+            try:
+                payload = self.client.get_apk_login_session(self.apk_session_id)
+            except Exception:
+                clear_cached_session(self.apk_session_cache_path)
+                return
+        if is_session_payload_reusable(payload):
+            save_cached_session(payload, path=self.apk_session_cache_path)
+        else:
+            clear_cached_session(self.apk_session_cache_path)
+
+    def _restore_cached_apk_session(self):
+        cached = load_cached_session(self.apk_session_cache_path)
+        if not is_session_payload_reusable(cached):
+            clear_cached_session(self.apk_session_cache_path)
+            return
+        session_id = int(cached.get("sessionId") or 0)
+        try:
+            current = self.client.get_apk_login_session(session_id)
+        except Exception:
+            clear_cached_session(self.apk_session_cache_path)
+            return
+        if not is_session_payload_reusable(current):
+            clear_cached_session(self.apk_session_cache_path)
+            return
+        self.apk_session_id = session_id
+        save_cached_session(current, path=self.apk_session_cache_path)
+        self._update_login_status_dot()
+        panel = self.panels.get("apk_backup")
+        if panel and hasattr(panel, "set_login_online"):
+            panel.set_login_online(True)
+        login_panel = self.panels.get("login")
+        if login_panel and hasattr(login_panel, "set_cached_authenticated_session"):
+            login_panel.set_cached_authenticated_session(session_id)
 
     def _on_apk_task_started(self, task_id: int, target_ref: dict = None):
         self.current_task_id = task_id
@@ -352,7 +415,7 @@ def main(argv=None):
     client.set_token(token)
     window = MainWindow(client, token, debug_mode=args.debug)
     window.setWindowTitle("qidian_save")
-    window.resize(1200, 800)
+    window.resize(960, 640)
     window.show()
     sys.exit(app.exec())
 

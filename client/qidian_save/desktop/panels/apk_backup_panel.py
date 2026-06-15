@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QObject, pyqtSignal
 
-from ..components import PageHeader, SurfaceCard, configure_page_layout
+from ..components import PageHeader, StatCard, SurfaceCard, configure_page_layout
 
 
 class _ApkSignals(QObject):
@@ -37,16 +37,46 @@ class ApkBackupPanel(QWidget):
         self._init_ui()
 
     def _init_ui(self):
-        layout = configure_page_layout(self)
+        layout = configure_page_layout(self, margins=(28, 20, 28, 20), spacing=14)
         layout.addWidget(PageHeader(
-            "在线备份", "查看任务状态、进度和下载备份结果", "ONLINE BACKUP"
+            "在线备份", "查看任务进度并下载备份结果", "ONLINE BACKUP"
         ))
+
+        summary_row = QHBoxLayout()
+        summary_row.setSpacing(12)
+        self.stat_login = StatCard("登录状态", "未登录", "warning")
+        self.stat_task = StatCard("当前任务", "无任务", "neutral")
+        self.stat_progress = StatCard("进度", "0/0", "accent")
+        summary_row.addWidget(self.stat_login, 1)
+        summary_row.addWidget(self.stat_task, 1)
+        summary_row.addWidget(self.stat_progress, 1)
+        layout.addLayout(summary_row)
 
         # 任务卡片
         task_card = SurfaceCard()
         task_layout = QVBoxLayout(task_card)
-        task_layout.setContentsMargins(20, 18, 20, 18)
-        task_layout.setSpacing(10)
+        task_layout.setContentsMargins(18, 16, 18, 16)
+        task_layout.setSpacing(12)
+
+        card_head = QHBoxLayout()
+        card_head.setSpacing(12)
+        title = QLabel("任务状态")
+        title.setProperty("ui-role", "section-title")
+        card_head.addWidget(title)
+        card_head.addStretch()
+
+        self.btn_refresh = QPushButton("  刷新")
+        self.btn_refresh.setProperty("btn-type", "secondary")
+        self.btn_refresh.clicked.connect(self._refresh_task)
+        self.btn_refresh.setEnabled(False)
+        card_head.addWidget(self.btn_refresh)
+
+        self.btn_download = QPushButton("  下载结果")
+        self.btn_download.setProperty("btn-type", "primary")
+        self.btn_download.clicked.connect(self._download_results)
+        self.btn_download.setEnabled(False)
+        card_head.addWidget(self.btn_download)
+        task_layout.addLayout(card_head)
 
         self.login_status_label = QLabel("请先到“登录”页面完成起点账号登录")
         self.login_status_label.setProperty("ui-role", "status")
@@ -57,22 +87,6 @@ class ApkBackupPanel(QWidget):
         self.task_status.setProperty("ui-role", "status")
         self.task_status.setWordWrap(True)
         task_layout.addWidget(self.task_status)
-
-        action_row = QHBoxLayout()
-        self.btn_refresh = QPushButton("  刷新任务")
-        self.btn_refresh.setProperty("btn-type", "secondary")
-        self.btn_refresh.clicked.connect(self._refresh_task)
-        self.btn_refresh.setEnabled(False)
-        action_row.addWidget(self.btn_refresh)
-
-        self.btn_download = QPushButton("  下载结果")
-        self.btn_download.setProperty("btn-type", "primary")
-        self.btn_download.clicked.connect(self._download_results)
-        self.btn_download.setEnabled(False)
-        action_row.addWidget(self.btn_download)
-
-        action_row.addStretch()
-        task_layout.addLayout(action_row)
 
         # debug 模式的高级目标输入
         self.target_input = QLabel()
@@ -94,6 +108,8 @@ class ApkBackupPanel(QWidget):
         artifact_layout.addWidget(self.artifacts_table)
         self.artifact_card.setVisible(self.debug_mode)
         layout.addWidget(self.artifact_card, 1)
+        if not self.debug_mode:
+            layout.addStretch(1)
 
     # ── 公开方法 ──
 
@@ -101,14 +117,18 @@ class ApkBackupPanel(QWidget):
         self.task_id = int(task_id or 0)
         self._target_ref = dict(target_ref or {})
         if self.task_id:
+            self.stat_task.set_value("刷新中")
+            self.stat_progress.set_value("--")
             self.task_status.setText(f"任务 #{self.task_id}: 正在刷新状态...")
             self._refresh_task()
 
     def set_login_online(self, online: bool):
         if online:
             self.login_status_label.setText("起点账号已登录，可以创建备份任务。")
+            self._set_stat_card(self.stat_login, "已登录", "success")
         else:
             self.login_status_label.setText("请先到“登录”页面完成起点账号登录")
+            self._set_stat_card(self.stat_login, "未登录", "warning")
 
     # ── 内部方法 ──
 
@@ -120,6 +140,12 @@ class ApkBackupPanel(QWidget):
                 self._sig.error.emit(str(exc))
         threading.Thread(target=worker, daemon=True).start()
 
+    def _set_stat_card(self, card: StatCard, value: str, accent: str):
+        card.set_value(value)
+        card.setProperty("accent", accent)
+        card.style().unpolish(card)
+        card.style().polish(card)
+
     def _refresh_task(self):
         if not self.task_id:
             return
@@ -130,6 +156,9 @@ class ApkBackupPanel(QWidget):
         self.task_id = int(data.get("taskId") or self.task_id or 0)
         self._task_status = str(data.get("status", ""))
         progress = f"{data.get('progressDone', 0)}/{data.get('progressTotal', 0)}"
+        task_accent = "success" if self._task_status == "completed" else "accent"
+        self._set_stat_card(self.stat_task, self._task_status or "未知", task_accent)
+        self.stat_progress.set_value(progress)
         self.task_status.setText(
             f"任务 #{self.task_id}: {self._task_status} ({progress})"
         )

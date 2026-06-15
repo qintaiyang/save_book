@@ -54,6 +54,14 @@ class ApkBackupPanelTests(unittest.TestCase):
         self.assertTrue(hasattr(panel, "btn_refresh"))
         self.assertTrue(hasattr(panel, "btn_download"))
 
+    def test_panel_has_compact_status_summary(self):
+        panel = ApkBackupPanel(FakeClient())
+        self.assertTrue(hasattr(panel, "stat_login"))
+        self.assertTrue(hasattr(panel, "stat_task"))
+        self.assertTrue(hasattr(panel, "stat_progress"))
+        self.assertIn("未登录", panel.stat_login.value.text())
+        self.assertIn("无任务", panel.stat_task.value.text())
+
     def test_panel_shows_no_task_state_initially(self):
         panel = ApkBackupPanel(FakeClient())
         self.assertIn("没有正在进行的任务", panel.task_status.text())
@@ -68,6 +76,8 @@ class ApkBackupPanelTests(unittest.TestCase):
         panel._run = lambda func, ok_signal: ok_signal.emit(func())
         panel.load_task(42)
         self.assertIn("completed", panel.task_status.text())
+        self.assertEqual(panel.stat_task.value.text(), "completed")
+        self.assertEqual(panel.stat_progress.value.text(), "1/1")
 
     def test_artifacts_enable_download(self):
         panel = ApkBackupPanel(FakeClient())
@@ -85,6 +95,7 @@ class ApkBackupPanelTests(unittest.TestCase):
         panel = ApkBackupPanel(FakeClient())
         panel.set_login_online(True)
         self.assertIn("已登录", panel.login_status_label.text())
+        self.assertIn("已登录", panel.stat_login.value.text())
 
     def test_artifact_table_hidden_in_normal_mode(self):
         panel = ApkBackupPanel(FakeClient())

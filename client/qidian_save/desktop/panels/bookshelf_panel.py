@@ -6,7 +6,6 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QObject, pyqtSignal
 from PyQt6.QtGui import QFont, QColor
-from ...qidian_client import get_bookshelf, load_cookies
 from ..components import PageHeader, SurfaceCard, configure_page_layout
 from ..theme import DARK_TOKENS
 
@@ -18,10 +17,11 @@ class _BookshelfSignal(QObject):
 
 
 class BookshelfPanel(QWidget):
-    def __init__(self, client, on_select_book):
+    def __init__(self, client, on_select_book, get_apk_session_id=None):
         super().__init__()
         self.client = client
         self.on_select_book = on_select_book
+        self.get_apk_session_id = get_apk_session_id or (lambda: 0)
         self._books_data = []  # [{id, name}, ...] 用于 cellClicked 查找
         self._sig = _BookshelfSignal()
         self._sig.books_ready.connect(self._on_books)
@@ -33,7 +33,7 @@ class BookshelfPanel(QWidget):
         layout = configure_page_layout(self)
         layout.addWidget(PageHeader(
             "我的书架",
-            "扫码登录后可查看账号书架并选择书籍备份",
+            "登录后可查看账号书架并选择书籍备份",
             "QIDIAN LIBRARY",
         ))
 
@@ -86,8 +86,8 @@ class BookshelfPanel(QWidget):
         layout.addWidget(self.status_extra)
 
     def _load_bookshelf(self):
-        cookies = load_cookies()
-        if not cookies or not cookies.get("ywguid"):
+        session_id = int(self.get_apk_session_id() or 0)
+        if not session_id:
             self._sig.no_cookies.emit()
             return
 
@@ -96,10 +96,15 @@ class BookshelfPanel(QWidget):
         self.status_label.setText("正在获取书架...")
         self.table.setRowCount(0)
 
+        self._run(
+            lambda: self.client.get_qidian_bookshelf(session_id).get("items", []),
+            self._sig.books_ready,
+        )
+
+    def _run(self, func, ok_signal):
         def _do():
             try:
-                books = get_bookshelf(cookies)
-                self._sig.books_ready.emit(books)
+                ok_signal.emit(func())
             except Exception as e:
                 import traceback
                 traceback.print_exc(file=sys.stderr)
@@ -108,12 +113,21 @@ class BookshelfPanel(QWidget):
         threading.Thread(target=_do, daemon=True).start()
 
     def _on_books(self, books: list):
-        self._books_data = [{"id": b["bookId"], "name": b["bookName"]} for b in books]
+        self._books_data = [
+            {
+                "id": str(b.get("bookId") or b.get("book_id") or ""),
+                "name": str(b.get("bookName") or b.get("book_name") or ""),
+            }
+            for b in books
+        ]
         self.table.setRowCount(len(books))
         for i, b in enumerate(books):
-            self.table.setItem(i, 0, QTableWidgetItem(b["bookId"]))
-            self.table.setItem(i, 1, QTableWidgetItem(b["bookName"]))
-            self.table.setItem(i, 2, QTableWidgetItem(b["authorName"]))
+            book_id = str(b.get("bookId") or b.get("book_id") or "")
+            book_name = str(b.get("bookName") or b.get("book_name") or "")
+            author_name = str(b.get("authorName") or b.get("author_name") or "")
+            self.table.setItem(i, 0, QTableWidgetItem(book_id))
+            self.table.setItem(i, 1, QTableWidgetItem(book_name))
+            self.table.setItem(i, 2, QTableWidgetItem(author_name))
 
             item = QTableWidgetItem("查看详情 →")
             item.setForeground(QColor(DARK_TOKENS["accent_highlight"]))

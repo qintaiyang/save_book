@@ -33,11 +33,18 @@ if __name__ == "__main__":
 
 
 class FakeApiClient:
+    def __init__(self):
+        self.session_calls = []
+
     def get_usage(self):
         return {"chaptersUsed": 0, "limit": 1000}
 
     def get_announcements(self):
         return []
+
+    def get_apk_login_session(self, session_id):
+        self.session_calls.append(session_id)
+        return {"sessionId": session_id, "stage": "authenticated", "expiresAt": "2999-01-01T00:00:00"}
 
 
 def test_main_window_registers_apk_decrypt_backup_panel():
@@ -59,6 +66,24 @@ def test_main_window_wires_apk_session_into_book_detail_panel():
     window._on_apk_session_authenticated(42)
     assert window.apk_session_id == 42
     assert window.panels["detail"].get_apk_session_id() == 42
+
+
+def test_main_window_restores_cached_apk_session(tmp_path):
+    from qidian_save.desktop.app import MainWindow
+    from qidian_save.apk_session_cache import save_cached_session
+
+    cache_path = tmp_path / "apk_session.json"
+    save_cached_session(
+        {"sessionId": 88, "stage": "authenticated", "expiresAt": "2999-01-01T00:00:00"},
+        path=cache_path,
+    )
+    client = FakeApiClient()
+
+    window = MainWindow(client, token="test-token", apk_session_cache_path=cache_path)
+
+    assert client.session_calls == [88]
+    assert window.apk_session_id == 88
+    assert window.panels["detail"].get_apk_session_id() == 88
 
 
 def test_main_window_debug_mode_registers_slow_backup_panel():

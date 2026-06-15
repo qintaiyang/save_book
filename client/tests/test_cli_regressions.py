@@ -63,6 +63,27 @@ class CliRegressionTests(unittest.TestCase):
             cli.cmd_adb_scan(args)
         scan_device.assert_not_called()
 
+    def test_cmd_adb_extract_does_not_save_or_print_user_id(self):
+        args = argparse.Namespace(device=None)
+        saved = {}
+        with patch.object(cli, "_resolve_device", return_value="dev"), \
+             patch.object(cli, "check_device", return_value=True), \
+             patch.object(cli, "check_root", return_value=True), \
+             patch.object(cli, "extract_params", return_value={
+                 "qimei36": "q",
+                 "pool_b64": "p",
+                 "userId": "old",
+                 "errors": [],
+             }), \
+             patch.object(cli, "load_config", return_value={}), \
+             patch.object(cli, "save_config", side_effect=lambda cfg: saved.update(cfg)), \
+             patch("builtins.print") as fake_print:
+            cli.cmd_adb_extract(args)
+
+        printed = "\n".join(str(call.args[0]) for call in fake_print.call_args_list if call.args)
+        self.assertNotIn("userId", printed)
+        self.assertEqual(saved, {"qimei36": "q", "pool_b64": "p"})
+
 
 if __name__ == "__main__":
     unittest.main()
