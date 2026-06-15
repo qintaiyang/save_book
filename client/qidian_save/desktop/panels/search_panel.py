@@ -8,8 +8,25 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QObject, pyqtSignal
 from PyQt6.QtGui import QFont, QColor
 from ...qidian_client import search_books as qidian_search
+from ...api_client import ApiError
 from ..components import PageHeader, SurfaceCard, configure_page_layout
 from ..theme import DARK_TOKENS
+
+
+_USER_ERROR_MAP = {
+    "ConnectionError": "网络连接失败，请稍后再试",
+    "Timeout": "连接超时，请检查网络后重试",
+}
+
+def _user_friendly_error(error_text: str) -> str:
+    for frag, msg in _USER_ERROR_MAP.items():
+        if frag in error_text:
+            return msg
+    if "502" in error_text or "不可用" in error_text or "API 错误" in error_text:
+        return "起点搜索接口暂时不可用，请稍后再试"
+    if "401" in error_text or "Unauthorized" in error_text:
+        return "登录已过期，请重新登录"
+    return "搜索失败，请稍后重试"
 
 
 class _SearchSignal(QObject):
@@ -26,7 +43,7 @@ class SearchPanel(QWidget):
         self._results_data = []  # [{id, name}, ...]
         self._sig = _SearchSignal()
         self._sig.results_ready.connect(self._on_results)
-        self._sig.search_error.connect(lambda e: self.status_label.setText(f"搜索失败: {e}"))
+        self._sig.search_error.connect(self._on_search_error)
         self._sig.search_done.connect(self._on_search_done)
         self._init_ui()
 
@@ -104,11 +121,15 @@ class SearchPanel(QWidget):
                 results = qidian_search(keyword)
                 print(f"[search] 结果数量: {len(results)}", file=sys.stderr)
                 self._sig.results_ready.emit(results)
+            except ApiError as e:
+                msg = _user_friendly_error(str(e))
+                print(f"[search] API 错误: {e}", file=sys.stderr)
+                self._sig.search_error.emit(msg)
             except Exception as e:
                 print(f"[search] 异常: {e}", file=sys.stderr)
                 import traceback
                 traceback.print_exc(file=sys.stderr)
-                self._sig.search_error.emit(str(e))
+                self._sig.search_error.emit(_user_friendly_error(str(e)))
             finally:
                 self._sig.search_done.emit()
 
@@ -127,7 +148,13 @@ class SearchPanel(QWidget):
             item.setFont(QFont("Microsoft YaHei", 12, QFont.Weight.Bold))
             self.table.setItem(i, 3, item)
 
-        self.status_label.setText(f"找到 {len(results)} 个结果")
+        if results:
+            self.status_label.setText(f"找到 {len(results)} 个结果")
+        else:
+            self.status_label.setText("没有找到相关书籍")
+
+    def _on_search_error(self, msg: str):
+        self.status_label.setText(msg)
 
     def _on_cell_clicked(self, row: int, col: int):
         """点击操作列（col=3）的蓝字详情 → 跳转。"""

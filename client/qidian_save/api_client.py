@@ -213,6 +213,57 @@ class QidianSaveClient:
     def cleanup_task(self, task_id: int) -> dict:
         return self._delete(f"/api/backup/{task_id}")
 
+    # ── APK Backup Open API ──
+
+    def create_apk_login_session(self, account: str, password: str,
+                                 client_meta: dict = None) -> dict:
+        return self._post("/api/v1/apk/login/session", json={
+            "account": account,
+            "password": password,
+            "clientMeta": client_meta or {},
+        })
+
+    def get_apk_login_session(self, session_id: int) -> dict:
+        return self._get(f"/api/v1/apk/login/session/{session_id}")
+
+    def submit_apk_login_challenge(self, session_id: int, payload: dict,
+                                   target_ref: dict = None,
+                                   start_task: bool = False) -> dict:
+        body = dict(payload or {})
+        if target_ref is not None:
+            body["targetRef"] = target_ref
+        if start_task:
+            body["startTask"] = True
+        return self._post(
+            f"/api/v1/apk/login/session/{session_id}/challenge",
+            json=body,
+        )
+
+    def create_apk_backup_task(self, session_id: int,
+                               target_ref: dict = None) -> dict:
+        return self._post("/api/v1/apk/tasks", json={
+            "sessionId": session_id,
+            "targetRef": target_ref or {},
+        })
+
+    def get_apk_task(self, task_id: int) -> dict:
+        return self._get(f"/api/v1/apk/tasks/{task_id}")
+
+    def list_apk_task_artifacts(self, task_id: int) -> list:
+        data = self._get(f"/api/v1/apk/tasks/{task_id}/artifacts")
+        return data.get("artifacts", [])
+
+    def download_apk_artifact(self, task_id: int, artifact_id: int) -> bytes:
+        resp = self.session.get(
+            f"{self.base_url}/api/v1/apk/tasks/{task_id}/artifacts/{artifact_id}",
+            timeout=300,
+        )
+        self._raise_on_error(resp)
+        return resp.content
+
+    def delete_apk_task(self, task_id: int) -> dict:
+        return self._delete(f"/api/v1/apk/tasks/{task_id}")
+
     # ── .qd Decrypt — Zip workflow ──
 
     def decrypt_qd_zip(self, zip_path: str, qimei36: str, user_id: str,

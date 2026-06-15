@@ -39,6 +39,7 @@ from .panels.qidian_login_panel import QidianLoginPanel
 from .panels.search_panel import SearchPanel
 from .panels.book_detail_panel import BookDetailPanel
 from .panels.backup_panel import BackupPanel
+from .panels.apk_backup_panel import ApkBackupPanel
 from .panels.qd_decrypt_panel import QDDecryptPanel
 from .panels.usage_panel import UsagePanel
 from .panels.bookshelf_panel import BookshelfPanel
@@ -111,6 +112,7 @@ class MainWindow(FluentWindow):
         super().__init__()
         self.client = client
         self.token = token
+        self.apk_session_id = 0
         self.current_task_id = None
         self._current_theme = Theme.DARK
         self.setMinimumSize(1024, 680)
@@ -130,8 +132,18 @@ class MainWindow(FluentWindow):
         self.panels["search"]   = SearchPanel(self.client, self._on_book_selected)
         self.panels["qrcode"]   = QidianLoginPanel(self.client)
         self.panels["bookshelf"] = BookshelfPanel(self.client, self._on_book_selected)
-        self.panels["detail"]   = BookDetailPanel(self.client, self._on_backup_started)
+        self.panels["detail"]   = BookDetailPanel(
+            self.client,
+            self._on_backup_started,
+            get_apk_session_id=lambda: self.apk_session_id,
+            on_apk_task_started=self._on_apk_task_started,
+        )
         self.panels["backup"]   = BackupPanel(self.client)
+        self.panels["apk_backup"] = ApkBackupPanel(
+            self.client,
+            on_session_authenticated=self._on_apk_session_authenticated,
+            on_go_search=lambda: self.switchTo(self.panels["search"]),
+        )
         self.panels["decrypt"]  = QDDecryptPanel(self.client)
         self.panels["usage"]    = UsagePanel(self.client)
 
@@ -140,7 +152,8 @@ class MainWindow(FluentWindow):
             ("search",    FIF.SEARCH,           "搜索书籍",  NavigationItemPosition.TOP),
             ("qrcode",    FIF.QRCODE,           "起点扫码",  NavigationItemPosition.TOP),
             ("bookshelf", FIF.LIBRARY,          "书架",     NavigationItemPosition.TOP),
-            ("backup",    FIF.CLOUD_DOWNLOAD,   "在线备份",  NavigationItemPosition.TOP),
+            ("backup",    FIF.CLOUD_DOWNLOAD,   "慢速备份",  NavigationItemPosition.TOP),
+            ("apk_backup", FIF.APPLICATION,      "快速备份", NavigationItemPosition.TOP),
             ("decrypt",   FIF.DEVELOPER_TOOLS,  ".qd 解密", NavigationItemPosition.TOP),
             ("usage",     FIF.HISTORY,          "用量查询",  NavigationItemPosition.BOTTOM),
         ]
@@ -175,6 +188,17 @@ class MainWindow(FluentWindow):
             backup_options or {},
         )
         self.switchTo(self.panels["backup"])
+
+    def _on_apk_session_authenticated(self, session_id: int):
+        self.apk_session_id = int(session_id or 0)
+
+    def _on_apk_task_started(self, task_id: int, target_ref: dict = None):
+        del target_ref
+        self.current_task_id = task_id
+        panel = self.panels["apk_backup"]
+        if hasattr(panel, "load_task"):
+            panel.load_task(task_id)
+        self.switchTo(panel)
 
     # ── 主题 ───────────────────────────────────────────────
 

@@ -23,6 +23,7 @@ dependencies = [
     "requests>=2.28",
     "PySocks>=1.7",
     "PyQt6>=6.5",
+    "PyQt6-WebEngine>=6.5",
     "PyQt6-Fluent-Widgets>=1.11",
 ]
 

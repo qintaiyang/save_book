@@ -25,12 +25,22 @@ CHK = Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled
 
 
 class BookDetailPanel(QWidget):
-    def __init__(self, client, on_backup_started):
+    def __init__(
+        self,
+        client,
+        on_backup_started,
+        get_apk_session_id=None,
+        on_apk_task_started=None,
+    ):
         super().__init__()
         self.client = client
         # on_backup_started(task_id, server_crawl, book_id, qd_cookies)
         self.on_backup_started = on_backup_started
+        self.get_apk_session_id = get_apk_session_id or (lambda: 0)
+        self.on_apk_task_started = on_apk_task_started
         self.book_id = ""
+        self.book_name = ""
+        self._chapters = []
         self._sig = _DetailSignal()
         self._sig.catalog_ready.connect(self._on_catalog)
         self._sig.catalog_error.connect(lambda e: self.label_author.setText(f"获取目录失败: {e}"))
@@ -133,6 +143,9 @@ class BookDetailPanel(QWidget):
         self.chk_server_crawl = QCheckBox("服务器抓取")
         cr.addWidget(self.chk_server_crawl)
 
+        self.chk_apk_backup = QCheckBox("快速备份")
+        cr.addWidget(self.chk_apk_backup)
+
         self.label_selected = QLabel("已选 0 章")
         self.label_selected.setProperty("ui-role", "status")
         cr.addWidget(self.label_selected)
@@ -150,8 +163,7 @@ class BookDetailPanel(QWidget):
     # ── Public ──
 
     def load_book(self, book_id: str, book_name: str):
-        self.book_id = book_id
-        self.label_title.setText(book_name)
+        self.load_book_context(book_id, book_name)
         self.label_author.setText("加载中...")
         self.table.setRowCount(0)
         self._last_clicked_row = -1
@@ -167,12 +179,18 @@ class BookDetailPanel(QWidget):
 
         threading.Thread(target=_load, daemon=True).start()
 
+    def load_book_context(self, book_id: str, book_name: str):
+        self.book_id = str(book_id)
+        self.book_name = str(book_name)
+        self.label_title.setText(self.book_name)
+
     def _on_catalog(self, cat: dict):
         self.label_author.setText(f"作者: {cat.get('authorName', cat.get('author', '未知'))}")
         total = cat["totalChapters"]
         self.label_chapters.setText(f"共 {total} 章")
 
         chapters = cat.get("chapters", [])
+        self._chapters = list(chapters)
         self.table.setRowCount(len(chapters))
         for i, ch in enumerate(chapters):
             chk = QTableWidgetItem("")
@@ -252,16 +270,69 @@ class BookDetailPanel(QWidget):
             "proxy_rotate_every": 50,
         }
 
-    def _start_backup(self):
-        if not self.book_id:
-            QMessageBox.warning(self, "提示", "请先选择一本书")
-            return
-
+    def _selected_rows(self) -> list[int]:
         checked_rows = []
         for i in range(self.table.rowCount()):
             ci = self.table.item(i, 0)
             if ci and ci.checkState() == Qt.CheckState.Checked:
                 checked_rows.append(i)
+        return checked_rows
+
+    def _build_apk_target_ref(self, checked_indices: list[int]) -> dict:
+        chapter_ids = []
+        for row in checked_indices:
+            if row < 0 or row >= len(self._chapters):
+                continue
+            raw_id = self._chapters[row].get("chapterId")
+            if raw_id in (None, ""):
+                continue
+            chapter_ids.append(int(raw_id))
+        return {
+            "bookId": self.book_id,
+            "bookName": self.book_name or self.label_title.text(),
+            "chapterIds": chapter_ids,
+            "chapterIndexes": checked_indices,
+            "wholeBook": len(chapter_ids) == len(self._chapters) and bool(chapter_ids),
+            "downloadMode": "batch",
+            "timeout": 60,
+        }
+
+    def _start_apk_backup(self, checked_indices: list[int]):
+        session_id = int(self.get_apk_session_id() or 0)
+        if not session_id:
+            QMessageBox.warning(self, "提示", "请先到“快速备份”页面完成账号验证")
+            return
+        try:
+            target_ref = self._build_apk_target_ref(checked_indices)
+        except (TypeError, ValueError):
+            QMessageBox.warning(self, "提示", "目录里存在无效章节 ID，无法创建 APK 备份")
+            return
+        if not target_ref["chapterIds"]:
+            QMessageBox.warning(self, "提示", "没有可提交的章节 ID")
+            return
+        self.btn_backup.setEnabled(False)
+        self.btn_backup.setText("创建任务...")
+
+        def _do():
+            try:
+                result = self.client.create_apk_backup_task(session_id, target_ref)
+                task_id = result["taskId"]
+                if self.on_apk_task_started:
+                    self.on_apk_task_started(task_id, target_ref)
+            except Exception as e:
+                print(f"[detail] APK 备份创建异常: {e}", file=sys.stderr)
+                self._sig.backup_failed.emit(str(e))
+            finally:
+                self._sig.backup_finished.emit()
+
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _start_backup(self):
+        if not self.book_id:
+            QMessageBox.warning(self, "提示", "请先选择一本书")
+            return
+
+        checked_rows = self._selected_rows()
 
         if not checked_rows:
             QMessageBox.warning(self, "提示", "请先勾选要备份的章节")
@@ -269,6 +340,9 @@ class BookDetailPanel(QWidget):
 
         # 传递实际勾选的行号（0-based），不再转换为 start/end 范围
         checked_indices = sorted(checked_rows)
+        if self.chk_apk_backup.isChecked():
+            self._start_apk_backup(checked_indices)
+            return
 
         # 服务端爬取：服务端只认 start/end 范围，非连续选取只能走最小-最大范围
         # 本地爬取：客户端用 checked_indices 精确过滤，只爬勾选的章节

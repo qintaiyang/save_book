@@ -87,7 +87,11 @@ def cmd_login(args):
             print(f"登录失败: {msg}")
 
 def cmd_search(args):
-    results = qidian_search(args.keyword)
+    try:
+        results = qidian_search(args.keyword)
+    except Exception as e:
+        print(f"搜索失败: {e}")
+        return
     print(f"找到 {len(results)} 个结果:\n")
     for r in results:
         print(f"  {r['bookId']:<14} {r['bookName']:<20} {r['authorName']:<12}")
