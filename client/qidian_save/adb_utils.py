@@ -4,7 +4,7 @@ ADB 查找优先级：
   1. 项目捆绑的 client/adb/adb.exe
   2. 系统 PATH 中的 adb
 """
-import json, os, subprocess, sqlite3, struct, sys, zipfile, re, tempfile
+import json, os, subprocess, sqlite3, struct, sys, tarfile, time, zipfile, re, tempfile, shlex
 from pathlib import Path
 from typing import Optional
 
@@ -105,11 +105,38 @@ def adb_command(cmd: str, timeout: int = 10, device_serial: str | None = None) -
     """执行 adb shell 命令，返回 stdout
 
     使用 list 形式避免 Git Bash (MSYS2) 路径转换。
+    注意：不支持 shell 管道/重定向/引号。参看 adb_shell_raw()。
     """
     parts = cmd.split()
     base = _adb_prefix(device_serial)
     r = subprocess.run(base + ["shell"] + parts,
-                       capture_output=True, text=True, timeout=timeout)
+                       capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", timeout=timeout)
+    if r.returncode != 0:
+        err = r.stderr.strip()
+        if "no devices" in err or "device" not in err.lower():
+            raise RuntimeError("未检测到 Android 设备，请连接 USB 并开启调试")
+        if err:
+            _log(f"adb 警告: {err}")
+    return r.stdout
+
+
+def adb_shell_raw(raw_cmd: str, timeout: int = 30, device_serial: str | None = None) -> str:
+    """执行 adb shell sh -c "<原始命令>"，支持管道/重定向/引号。
+
+    Args:
+        raw_cmd: 完整的 shell 命令字符串，如 "find /path -type f -name '*.qd'"
+
+    传参方式：将 "sh -c <quoted_cmd>" 作为单个列表元素传给 adb shell，
+    确保设备端的 sh 拿到完整命令字符串。
+    """
+    base = _adb_prefix(device_serial)
+    device_cmd = "sh -c " + shlex.quote(raw_cmd)
+    r = subprocess.run(
+        base + ["shell", device_cmd],
+        capture_output=True, text=True, encoding="utf-8",
+        errors="replace", timeout=timeout,
+    )
     if r.returncode != 0:
         err = r.stderr.strip()
         if "no devices" in err or "device" not in err.lower():
@@ -140,7 +167,8 @@ def _adb_pull(remote: str, local: str, device_serial: str | None = None) -> bool
     local = str(Path(local).resolve())
     base = _adb_prefix(device_serial)
     r = subprocess.run(base + ["pull", remote, local],
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", timeout=120)
     return r.returncode == 0
 
 
@@ -207,8 +235,7 @@ def extract_params(device_serial: str | None = None) -> dict:
     步骤:
       1. 检查 root 可用
       2. 拉取 beacon DB → 提取 QIMEI36
-      3. 读取书籍目录 → 提取 userId
-      4. 拉取 MMKV pref_utils → 提取 Pool
+      3. 拉取 MMKV pref_utils → 提取 Pool
 
     Args:
         device_serial: 可选，指定设备序列号
@@ -238,17 +265,7 @@ def extract_params(device_serial: str | None = None) -> dict:
                         result["qimei36"] = qimei36
                         break
 
-    # ── 2. 提取 userId（从书籍目录名） ──
-    out = adb_command(
-        f"ls {ADB_BASE}", timeout=10, device_serial=device_serial
-    )
-    for line in out.splitlines():
-        uid = line.strip()
-        if uid.isdigit():
-            result["userId"] = uid
-            break
-
-    # ── 3. 提取 Pool（从 MMKV） ──
+    # ── 2. 提取 Pool（从 MMKV） ──
     if _root_copy(
         f"{_PRIV_MMKV}/pref_utils", "/sdcard/pref_utils", device_serial
     ):
@@ -259,11 +276,9 @@ def extract_params(device_serial: str | None = None) -> dict:
                 if pool:
                     result["pool_b64"] = pool
 
-    # ── 4. 报错收集 ──
+    # ── 3. 报错收集 ──
     if not result["qimei36"]:
         result["errors"].append("未提取到 QIMEI36")
-    if not result["userId"]:
-        result["errors"].append("未提取到 userId（书架为空？）")
     if not result["pool_b64"]:
         result["errors"].append("未提取到 Pool（未下载过付费章节？）")
 
@@ -385,6 +400,126 @@ def pull_device_files(output_dir: str | Path, device_serial: str | None = None) 
     return {"total": total_qd + total_db, "qdFiles": total_qd, "databases": total_db, "users": users}
 
 
+# ── Tar 快速拉取 ────────────────────────────────────────────────────
+
+
+def check_tar_available(device_serial: str | None = None) -> bool:
+    """检查设备是否支持 tar 命令（tar 或 toybox）"""
+    out = adb_shell_raw("command -v tar || command -v toybox", device_serial=device_serial)
+    return bool(out.strip())
+
+
+def _safe_extract_tar(tar_path: Path, output_dir: Path) -> None:
+    """安全解压 tar，防止路径穿越"""
+    base = output_dir.resolve()
+    with tarfile.open(str(tar_path), "r") as tf:
+        for member in tf.getmembers():
+            if member.issym() or member.islnk():
+                raise ValueError("tar 包含链接文件: " + member.name)
+            target = (base / member.name).resolve()
+            try:
+                target.relative_to(base)
+            except ValueError:
+                raise ValueError("tar 包含非法路径: " + member.name)
+        tf.extractall(str(base))
+
+
+def pull_device_files_fast(output_dir: str | Path, device_serial: str | None = None) -> dict:
+    """通过 tar 快速拉取设备上的 .qd 文件和数据库
+
+    在设备端打包为 tar，拉到本地解压，比逐文件 adb pull 快得多。
+
+    Returns:
+        {"total": int, "qdFiles": int, "databases": int, "users": [{"userId": str, "count": int}]}
+
+    Raises:
+        RuntimeError: 打包或拉取失败时抛出，由调用方处理回退
+    """
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = int(time.time())
+    remote_tar = f"/sdcard/qidian_book_cache_{timestamp}.tar"
+    local_tar = out_dir / f"qidian_book_cache_{timestamp}.tar"
+
+    try:
+        # 设备端打包（toybox tar 也支持 -cf）
+        cmd = f"cd {ADB_BASE} && tar -cf {remote_tar} ."
+        adb_shell_raw(cmd, timeout=120, device_serial=device_serial)
+
+        # 拉取 tar
+        if not _adb_pull(remote_tar, str(local_tar), device_serial):
+            raise RuntimeError("拉取 tar 文件失败")
+
+        # 安全解压
+        _safe_extract_tar(local_tar, out_dir)
+
+        # 扫描已提取的目录构建结果
+        total_qd = 0
+        total_db = 0
+        users = []
+
+        for uid_dir in sorted(out_dir.iterdir()):
+            if not uid_dir.is_dir():
+                continue
+            uid = uid_dir.name
+            count = 0
+
+            for entry in uid_dir.iterdir():
+                if entry.name.endswith(".qd-journal"):
+                    continue
+                if entry.is_file() and entry.suffix == ".qd":
+                    # userId 目录下的 .qd 视为数据库
+                    total_db += 1
+                elif entry.is_file() and entry.suffix == ".db":
+                    total_db += 1
+                elif entry.is_dir():
+                    # 书籍子目录
+                    for f in entry.rglob("*.qd"):
+                        total_qd += 1
+                        count += 1
+                    for f in entry.rglob("*.db"):
+                        total_db += 1
+
+            if count:
+                users.append({"userId": uid, "count": count})
+
+        return {"total": total_qd + total_db, "qdFiles": total_qd, "databases": total_db, "users": users}
+
+    finally:
+        # 清理设备临时文件
+        try:
+            adb_shell_raw(f"rm -f {remote_tar}", device_serial=device_serial)
+        except Exception:
+            pass
+        # 清理本地临时 tar
+        try:
+            if local_tar.exists():
+                local_tar.unlink()
+        except Exception:
+            pass
+
+
+def pull_device_files_auto(output_dir: str | Path, device_serial: str | None = None) -> dict:
+    """自动选择拉取模式，tar 优先，失败回退逐文件拉取
+
+    Returns:
+        {"total": int, "qdFiles": int, "databases": int, "users": [...], "mode": str}
+
+    mode 为 "tar" 或 "legacy"
+    """
+    try:
+        if check_tar_available(device_serial):
+            result = pull_device_files_fast(output_dir, device_serial)
+            result["mode"] = "tar"
+            return result
+    except Exception as e:
+        _log(f"快速拉取失败，回退逐文件拉取: {e}")
+    result = pull_device_files(output_dir, device_serial)
+    result["mode"] = "legacy"
+    return result
+
+
 # ── 数据库查看 ──────────────────────────────────────────────────────
 
 def create_qd_zip(qd_dir: str | Path, output_zip: str | Path = None) -> str:
@@ -463,3 +598,136 @@ def inspect_database(db_path: str) -> dict:
 
     except Exception as e:
         return {"dbName": Path(db_path).name, "error": str(e)}
+
+
+# ── TypeB 种子扫描 ──────────────────────────────────────────────────
+
+QD_HEADER_BASE = "/storage/emulated/0/Android/data/com.qidian.QDReader/files/QDReader/book"
+
+
+def find_first_typeb_seed(device_serial: str | None = None) -> dict | None:
+    """快速扫描第一个 TypeB 种子（文件头 0x40），找到即停。
+
+    使用单次 adb_shell_raw 调用，通过设备端 shell 脚本
+    用 find + dd + od 管道遍历 .qd 文件，匹配到首个
+    0x40 文件头后立即 break。
+
+    Returns:
+        {"userId": str, "bookId": str, "chapterId": str,
+         "remotePath": str, "size": int} or None
+    """
+    shell_script = (
+        "find %s -type f -name '*.qd' 2>/dev/null | "
+        "while IFS= read -r f; do "
+        "  h=$(dd if=\"$f\" bs=4 count=1 2>/dev/null | "
+        "od -A n -t x4 -N 4 2>/dev/null | tr -d ' '); "
+        '  if [ "$h" = "00000040" ]; then '
+        "    size=$(stat -c%%s \"$f\" 2>/dev/null || echo 0); "
+        '    echo "$f|$size"; '
+        "    break; "
+        "  fi; "
+        "done"
+    ) % ADB_BASE
+
+    out = adb_shell_raw(shell_script, device_serial=device_serial)
+    line = out.strip()
+    if not line or "|" not in line:
+        return None
+
+    remote_path, size_str = line.split("|", 1)
+    remote_path = remote_path.strip()
+    try:
+        size = int(size_str.strip())
+    except (ValueError, TypeError):
+        size = 0
+
+    # Parse path: .../book/{userId}/{bookId}/{chapterId}.qd
+    parts = remote_path.split("/")
+    try:
+        chapter_file = parts[-1]
+        chapter_id = chapter_file.replace(".qd", "")
+        book_id = parts[-2]
+        user_id = parts[-3]
+    except IndexError:
+        return None
+
+    return {
+        "userId": user_id,
+        "bookId": book_id,
+        "chapterId": chapter_id,
+        "remotePath": remote_path,
+        "size": size,
+    }
+
+
+def scan_typeb_seeds(device_serial: str | None = None, first_only: bool = False) -> list[dict]:
+    """扫描设备上的 TypeB .qd 种子文件（文件头 0x40）。
+
+    使用 find 命令遍历所有 .qd 文件，仅读取前 4 字节判断类型。
+
+    Args:
+        device_serial: 可选，指定设备序列号
+        first_only: 为 True 时用快速模式找到第一个即返回
+
+    Returns:
+        [{"userId": str, "bookId": str, "chapterId": str,
+          "remotePath": str, "size": int}, ...]
+    """
+    if first_only:
+        seed = find_first_typeb_seed(device_serial)
+        return [seed] if seed else []
+
+    result = []
+
+    # Find all .qd files under the book directory
+    find_cmd = "find %s -type f -name '*.qd' 2>/dev/null" % QD_HEADER_BASE
+    out = adb_shell_raw(find_cmd, device_serial=device_serial)
+    if not out.strip():
+        return []
+
+    for remote_path in out.strip().splitlines():
+        remote_path = remote_path.strip()
+        if not remote_path:
+            continue
+
+        quoted = shlex.quote(remote_path)
+
+        # Check first 4 bytes via od
+        od_cmd = "dd if=%s bs=4 count=1 2>/dev/null | od -A n -t u4 -N 4 2>/dev/null | head -1" % quoted
+        od_out = adb_shell_raw(od_cmd, device_serial=device_serial).strip()
+
+        try:
+            header_val = int(od_out.split()[0])
+        except (ValueError, IndexError):
+            continue
+
+        if header_val != 0x40:
+            continue
+
+        # Parse path: .../book/{userId}/{bookId}/{chapterId}.qd
+        parts = remote_path.split("/")
+        try:
+            chapter_file = parts[-1]
+            chapter_id = chapter_file.replace(".qd", "")
+            book_id = parts[-2]
+            user_id = parts[-3]
+        except IndexError:
+            continue
+
+        # Get file size
+        stat_cmd = "stat -c%%s %s 2>/dev/null || echo 0" % quoted
+        size_str = adb_shell_raw(stat_cmd, device_serial=device_serial).strip()
+        try:
+            size = int(size_str)
+        except (ValueError, TypeError):
+            size = 0
+
+        result.append({
+            "userId": user_id,
+            "bookId": book_id,
+            "chapterId": chapter_id,
+            "remotePath": remote_path,
+            "size": size,
+        })
+
+    return result

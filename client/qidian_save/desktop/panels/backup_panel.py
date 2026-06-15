@@ -1,4 +1,4 @@
-"""在线备份面板 — 任务进度 + 章节列表 + 下载"""
+"""慢速备份面板 — 任务进度 + 章节列表 + 下载"""
 import io, json, os, threading, time, zipfile
 from pathlib import Path
 from PyQt6.QtWidgets import (
@@ -66,7 +66,7 @@ class BackupPanel(QWidget):
     def _init_ui(self):
         layout = configure_page_layout(self)
         layout.addWidget(PageHeader(
-            "在线备份", "查看任务进度并下载已完成章节", "BACKUP TASK"
+            "慢速备份", "查看任务进度并下载已完成章节", "SLOW BACKUP"
         ))
 
         # Task info card

@@ -1,5 +1,5 @@
 """qidian_save 桌面主应用 — FluentWindow 重构版"""
-import sys, os, threading
+import argparse, sys, os, threading
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QLabel, QHBoxLayout,
     QDialog, QPushButton,
@@ -9,6 +9,13 @@ from PyQt6.QtGui import QFont
 
 from ..api_client import QidianSaveClient
 from .. import DATA_DIR
+from ..apk_session_cache import (
+    APK_SESSION_CACHE_FILE,
+    clear_cached_session,
+    is_session_payload_reusable,
+    load_cached_session,
+    save_cached_session,
+)
 from ..qidian_client import set_cookie_path
 
 from qfluentwidgets import (
@@ -35,10 +42,12 @@ def _load_token() -> str:
 
 
 from .panels.login_panel import LoginPanel
+from .panels.apk_login_panel import ApkLoginPanel
 from .panels.qidian_login_panel import QidianLoginPanel
 from .panels.search_panel import SearchPanel
 from .panels.book_detail_panel import BookDetailPanel
 from .panels.backup_panel import BackupPanel
+from .panels.apk_backup_panel import ApkBackupPanel
 from .panels.qd_decrypt_panel import QDDecryptPanel
 from .panels.usage_panel import UsagePanel
 from .panels.bookshelf_panel import BookshelfPanel
@@ -107,18 +116,29 @@ class _MainSignals(QObject):
 # ── 主窗口 ────────────────────────────────────────────────
 
 class MainWindow(FluentWindow):
-    def __init__(self, client: QidianSaveClient, token: str):
+    def __init__(
+        self,
+        client: QidianSaveClient,
+        token: str,
+        debug_mode: bool = False,
+        apk_session_cache_path=APK_SESSION_CACHE_FILE,
+    ):
         super().__init__()
         self.client = client
         self.token = token
+        self.debug_mode = bool(debug_mode)
+        self.apk_session_cache_path = apk_session_cache_path
+        self.apk_session_id = 0
         self.current_task_id = None
+        self.current_apk_target_ref = {}
         self._current_theme = Theme.DARK
-        self.setMinimumSize(1024, 680)
+        self.setMinimumSize(860, 600)
         self._sig = _MainSignals()
         self._sig.usage_ready.connect(self._on_usage_ready)
         self._setup_panels()
         self._setup_theme()
         self._setup_status_bar()
+        self._restore_cached_apk_session()
         self._start_usage_timer()
 
     # ── 子界面注册 ─────────────────────────────────────────
@@ -127,23 +147,48 @@ class MainWindow(FluentWindow):
         """注册所有面板到导航系统。"""
         # 创建面板实例
         self.panels = {}
+        self.panels["login"]    = ApkLoginPanel(
+            self.client,
+            on_session_authenticated=self._on_apk_session_authenticated,
+            debug_mode=self.debug_mode,
+        )
         self.panels["search"]   = SearchPanel(self.client, self._on_book_selected)
         self.panels["qrcode"]   = QidianLoginPanel(self.client)
-        self.panels["bookshelf"] = BookshelfPanel(self.client, self._on_book_selected)
-        self.panels["detail"]   = BookDetailPanel(self.client, self._on_backup_started)
+        self.panels["bookshelf"] = BookshelfPanel(
+            self.client,
+            self._on_book_selected,
+            get_apk_session_id=lambda: self.apk_session_id,
+        )
+        self.panels["detail"]   = BookDetailPanel(
+            self.client,
+            self._on_backup_started,
+            get_apk_session_id=lambda: self.apk_session_id,
+            on_apk_task_started=self._on_apk_task_started,
+            debug_mode=self.debug_mode,
+        )
         self.panels["backup"]   = BackupPanel(self.client)
+        self.panels["apk_backup"] = ApkBackupPanel(
+            self.client,
+            on_session_authenticated=self._on_apk_session_authenticated,
+            on_go_search=lambda: self.switchTo(self.panels["search"]),
+            debug_mode=self.debug_mode,
+        )
         self.panels["decrypt"]  = QDDecryptPanel(self.client)
         self.panels["usage"]    = UsagePanel(self.client)
 
-        # 导航项配置: (key, icon, label, position)
+        # 普通模式导航
         nav_items = [
-            ("search",    FIF.SEARCH,           "搜索书籍",  NavigationItemPosition.TOP),
-            ("qrcode",    FIF.QRCODE,           "起点扫码",  NavigationItemPosition.TOP),
+            ("login",     FIF.PEOPLE,           "登录",     NavigationItemPosition.TOP),
+            ("search",    FIF.SEARCH,           "搜索书籍", NavigationItemPosition.TOP),
             ("bookshelf", FIF.LIBRARY,          "书架",     NavigationItemPosition.TOP),
-            ("backup",    FIF.CLOUD_DOWNLOAD,   "在线备份",  NavigationItemPosition.TOP),
-            ("decrypt",   FIF.DEVELOPER_TOOLS,  ".qd 解密", NavigationItemPosition.TOP),
-            ("usage",     FIF.HISTORY,          "用量查询",  NavigationItemPosition.BOTTOM),
+            ("apk_backup", FIF.APPLICATION,      "在线备份", NavigationItemPosition.TOP),
+            ("decrypt",   FIF.DEVELOPER_TOOLS,  "本地备份", NavigationItemPosition.TOP),
+            ("usage",     FIF.HISTORY,          "历史记录", NavigationItemPosition.BOTTOM),
         ]
+        # debug 模式额外添加
+        if self.debug_mode:
+            nav_items.insert(4, ("backup", FIF.CLOUD_DOWNLOAD, "慢速备份", NavigationItemPosition.TOP))
+            nav_items.append(("qrcode", FIF.QRCODE, "网页 Cookie 登录（调试）", NavigationItemPosition.TOP))
 
         for key, icon, label, pos in nav_items:
             widget = self.panels[key]
@@ -159,7 +204,7 @@ class MainWindow(FluentWindow):
     def _on_book_selected(self, book_id: str, book_name: str):
         self.panels["detail"].load_book(book_id, book_name)
         # 程序跳转到详情面板（不在导航中高亮）
-        self.switchTo(self.panels["detail"])
+        self.stackedWidget.setCurrentWidget(self.panels["detail"])
 
     def _on_backup_started(self, task_id: int, server_crawl: bool = True,
                            book_id: str = "", qd_cookies: dict = None,
@@ -175,6 +220,66 @@ class MainWindow(FluentWindow):
             backup_options or {},
         )
         self.switchTo(self.panels["backup"])
+
+    def _on_apk_session_authenticated(self, session_id: int, session_payload: dict | None = None):
+        self.apk_session_id = int(session_id or 0)
+        self._cache_current_apk_session(session_payload)
+        self._update_login_status_dot()
+        # 也通知在线备份面板更新登录状态显示
+        panel = self.panels.get("apk_backup")
+        if panel and hasattr(panel, "set_login_online"):
+            panel.set_login_online(bool(self.apk_session_id))
+        login_panel = self.panels.get("login")
+        if login_panel and hasattr(login_panel, "set_cached_authenticated_session"):
+            login_panel.set_cached_authenticated_session(self.apk_session_id)
+
+    def _cache_current_apk_session(self, session_payload: dict | None = None):
+        if not self.apk_session_id:
+            clear_cached_session(self.apk_session_cache_path)
+            return
+        payload = session_payload
+        if not isinstance(payload, dict):
+            try:
+                payload = self.client.get_apk_login_session(self.apk_session_id)
+            except Exception:
+                clear_cached_session(self.apk_session_cache_path)
+                return
+        if is_session_payload_reusable(payload):
+            save_cached_session(payload, path=self.apk_session_cache_path)
+        else:
+            clear_cached_session(self.apk_session_cache_path)
+
+    def _restore_cached_apk_session(self):
+        cached = load_cached_session(self.apk_session_cache_path)
+        if not is_session_payload_reusable(cached):
+            clear_cached_session(self.apk_session_cache_path)
+            return
+        session_id = int(cached.get("sessionId") or 0)
+        try:
+            current = self.client.get_apk_login_session(session_id)
+        except Exception:
+            clear_cached_session(self.apk_session_cache_path)
+            return
+        if not is_session_payload_reusable(current):
+            clear_cached_session(self.apk_session_cache_path)
+            return
+        self.apk_session_id = session_id
+        save_cached_session(current, path=self.apk_session_cache_path)
+        self._update_login_status_dot()
+        panel = self.panels.get("apk_backup")
+        if panel and hasattr(panel, "set_login_online"):
+            panel.set_login_online(True)
+        login_panel = self.panels.get("login")
+        if login_panel and hasattr(login_panel, "set_cached_authenticated_session"):
+            login_panel.set_cached_authenticated_session(session_id)
+
+    def _on_apk_task_started(self, task_id: int, target_ref: dict = None):
+        self.current_task_id = task_id
+        self.current_apk_target_ref = dict(target_ref or {})
+        panel = self.panels["apk_backup"]
+        if hasattr(panel, "load_task"):
+            panel.load_task(task_id, target_ref=self.current_apk_target_ref)
+        self.switchTo(panel)
 
     # ── 主题 ───────────────────────────────────────────────
 
@@ -192,6 +297,13 @@ class MainWindow(FluentWindow):
         layout.setContentsMargins(12, 4, 12, 4)
         layout.setSpacing(8)
 
+        # 登录状态点
+        self.login_status_dot = QLabel()
+        self.login_status_dot.setObjectName("loginStatusDot")
+        self.login_status_dot.setFixedSize(10, 10)
+        self._update_login_status_dot()
+        layout.addWidget(self.login_status_dot)
+
         self.status_label = QLabel("已登录")
         self.status_label.setFont(QFont(DESIGN_TOKENS["font_family"], 9))
         layout.addWidget(self.status_label)
@@ -206,6 +318,7 @@ class MainWindow(FluentWindow):
         container = QPushButton()
         container.setObjectName("statusBarBtn")
         container.setProperty("ui-role", "navigation-status")
+        container.isSelectable = False
         container.setFixedHeight(36)
         container.setCursor(Qt.CursorShape.ArrowCursor)
         # 把 status_container 放进按钮里
@@ -217,6 +330,16 @@ class MainWindow(FluentWindow):
             "statusBar", container,
             position=NavigationItemPosition.BOTTOM,
         )
+
+    def _update_login_status_dot(self):
+        online = bool(self.apk_session_id)
+        if hasattr(self, "login_status_dot"):
+            self.login_status_dot.setProperty("login-state", "online" if online else "offline")
+            self.login_status_dot.setToolTip("起点账号已登录" if online else "起点账号未登录")
+            self.login_status_dot.style().unpolish(self.login_status_dot)
+            self.login_status_dot.style().polish(self.login_status_dot)
+        if hasattr(self, "status_label"):
+            self.status_label.setText("起点已登录" if online else "起点未登录")
 
     # ── 用量定时器 ─────────────────────────────────────────
 
@@ -243,7 +366,14 @@ class MainWindow(FluentWindow):
         self.usage_indicator.setText(f"今日 {usage['chaptersUsed']} / {usage['limit']} 次")
 
 
-def main():
+def _parse_desktop_args(argv=None):
+    parser = argparse.ArgumentParser(add_help=True)
+    parser.add_argument("--debug", action="store_true", help="显示慢速备份和高级调试控件")
+    return parser.parse_known_args(sys.argv[1:] if argv is None else argv)[0]
+
+
+def main(argv=None):
+    args = _parse_desktop_args(argv)
     # Qt6 默认启用 DPI 缩放 (PerMonitorV2)。SetProcessDpiAwarenessContext 警告无害
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
@@ -283,9 +413,9 @@ def main():
 
     # ── 主窗口 ──
     client.set_token(token)
-    window = MainWindow(client, token)
+    window = MainWindow(client, token, debug_mode=args.debug)
     window.setWindowTitle("qidian_save")
-    window.resize(1200, 800)
+    window.resize(960, 640)
     window.show()
     sys.exit(app.exec())
 

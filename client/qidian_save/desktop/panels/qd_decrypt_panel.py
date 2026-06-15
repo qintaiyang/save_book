@@ -11,6 +11,7 @@ from PyQt6.QtCore import Qt, QObject, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QIcon
 
 from ...zip_utils import safe_extract_zip
+from ...adb_utils import load_config as _load_adb_config, save_config as _save_adb_config
 from ..components import PageHeader, SurfaceCard, configure_page_layout
 
 
@@ -57,6 +58,13 @@ def _sanitize_filename(name: str) -> str:
     return name or "未命名"
 
 
+def _qd_zip_arcname(chapter: dict) -> str:
+    user_id = str(chapter.get("userId", "")).strip() or "unknown"
+    book_id = str(chapter["bookId"]).strip()
+    chapter_id = str(chapter["chapterId"]).strip()
+    return f"{user_id}/{book_id}/{chapter_id}.qd"
+
+
 class _DecryptSignal(QObject):
     log = pyqtSignal(str)
     error = pyqtSignal(str)
@@ -65,6 +73,7 @@ class _DecryptSignal(QObject):
     params_ready = pyqtSignal(str, str, str)
     busy_changed = pyqtSignal(bool)
     book_name_ready = pyqtSignal(str, str)  # bookId, bookName
+    seed_status_changed = pyqtSignal(str)
 
 
 class QDDecryptPanel(QWidget):
@@ -82,7 +91,11 @@ class QDDecryptPanel(QWidget):
         self._qd_dir = ""
         self._chapter_map = {}
         self._pending_open_dir = None
+        self._decrypt_session_ref = ""
+        self._seed_status = "未检测"
         self._init_ui()
+        self._sig.seed_status_changed.connect(self.label_seed_status.setText)
+        self._load_config_silent()
         self._check_device()
 
     # ── UI ──────────────────────────────────────────────────────────
@@ -90,7 +103,7 @@ class QDDecryptPanel(QWidget):
     def _init_ui(self):
         layout = configure_page_layout(self, margins=(24, 20, 24, 20), spacing=12)
         layout.addWidget(PageHeader(
-            ".qd 解密",
+            "本地备份",
             "连接设备、拉取章节并上传服务端完成解密",
             "DEVICE WORKSPACE",
         ))
@@ -133,6 +146,17 @@ class QDDecryptPanel(QWidget):
         self.btn_root_extract.setFixedHeight(38)
         self.btn_root_extract.clicked.connect(self._root_extract)
         tr.addWidget(self.btn_root_extract)
+
+        self.btn_auto_detect = QPushButton("  自动检测")
+        self.btn_auto_detect.setProperty("btn-type", "primary")
+        self.btn_auto_detect.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_auto_detect.setFixedHeight(38)
+        self.btn_auto_detect.clicked.connect(self._auto_detect_seed)
+        tr.addWidget(self.btn_auto_detect)
+
+        self.label_seed_status = QLabel("未检测")
+        self.label_seed_status.setProperty("ui-role", "status")
+        tr.addWidget(self.label_seed_status)
 
         layout.addWidget(top)
 
@@ -179,7 +203,8 @@ class QDDecryptPanel(QWidget):
         params_row.addWidget(self.input_pool, 1)
 
         self.input_userid = QLineEdit()
-        self.input_userid.setPlaceholderText("UserID")
+        self.input_userid.setPlaceholderText("UserID（自动从章节目录提取）")
+        self.input_userid.hide()
         params_row.addWidget(self.input_userid, 1)
 
         btn_load = QPushButton("加载")
@@ -302,6 +327,87 @@ class QDDecryptPanel(QWidget):
         """获取 qd_files 默认路径"""
         return str(Path(__file__).resolve().parent.parent.parent.parent / "qd_files")
 
+    # ── 自动检测 TypeB 种子 ──────────────────────────────────────────
+
+    def _auto_detect_seed(self):
+        serial = self._resolve_serial()
+        if not serial:
+            self._sig.error.emit("未检测到 Android 设备")
+            return
+        self._set_busy(True, "检测中...")
+        self._sig.seed_status_changed.emit("正在扫描...")
+        self._sig.log.emit("正在扫描设备上的 TypeB 缓存...")
+
+        def _run():
+            tmp_dir = None
+            try:
+                from ...adb_utils import scan_typeb_seeds, _adb_pull
+                import tempfile as _tf
+                import shutil
+
+                seeds = scan_typeb_seeds(device_serial=serial, first_only=True)
+                if not seeds:
+                    self._sig.log.emit("未发现可自动提取参数的缓存章节")
+                    self._sig.log.emit("请在起点 App 中下载或打开更多章节后，回到这里重新检测")
+                    self._seed_status = "未检测"
+                    self._sig.seed_status_changed.emit("未检测")
+                    self._set_busy_from_thread(False)
+                    return
+
+                seed = seeds[0]
+                self._sig.log.emit(
+                    f"发现 TypeB 种子: userId={seed['userId']} "
+                    f"bookId={seed['bookId']} chapterId={seed['chapterId']}"
+                )
+
+                tmp_dir = _tf.mkdtemp(prefix="qdseed_")
+                local_path = os.path.join(tmp_dir, f"{seed['chapterId']}.qd")
+                ok = _adb_pull(seed["remotePath"], local_path, device_serial=serial)
+                if not ok or not os.path.exists(local_path):
+                    self._sig.error.emit("拉取种子文件失败")
+                    self._seed_status = "检测失败"
+                    self._sig.seed_status_changed.emit("检测失败")
+                    self._set_busy_from_thread(False)
+                    return
+
+                self._sig.log.emit("正在上传种子文件到服务端，获取解密参数...")
+                result = self.client.create_qd_seed_session(local_path)
+                ref = result.get("decryptSessionRef", "")
+                masked = result.get("qimei36Masked", {})
+
+                if ref:
+                    self._decrypt_session_ref = ref
+                    cfg = _load_adb_config()
+                    cfg["decryptSessionRef"] = ref
+                    _save_adb_config(cfg)
+                    self._update_param_inputs_state()
+                    self._sig.log.emit(
+                        f"✅ 解密参数已就绪！seedChapterId={seed['chapterId']} "
+                        f"qimei={masked.get('prefix','')}...{masked.get('suffix','')}"
+                    )
+                    self._sig.log.emit("现在可以勾选章节并点击「上传解密选中章节」")
+                    self._seed_status = "已就绪"
+                    self._sig.seed_status_changed.emit("已就绪")
+                else:
+                    self._sig.error.emit("服务端返回异常，请重试")
+                    self._seed_status = "检测失败"
+                    self._sig.seed_status_changed.emit("检测失败")
+
+            except Exception as e:
+                self._sig.error.emit(f"自动检测失败: {e}")
+                self._seed_status = "检测失败"
+                self._sig.seed_status_changed.emit("检测失败")
+            finally:
+                if tmp_dir:
+                    try:
+                        import shutil
+                        shutil.rmtree(tmp_dir, ignore_errors=True)
+                    except Exception:
+                        pass
+                self._set_busy_from_thread(False)
+
+        threading.Thread(target=_run, daemon=True).start()
+
     # ── root 直接提取 ──────────────────────────────────────────────
 
     def _root_extract(self):
@@ -314,7 +420,6 @@ class QDDecryptPanel(QWidget):
                 from ...adb_utils import extract_params, load_config, save_config
                 result = extract_params(device_serial=serial)
                 qimei36 = result.get("qimei36", "")
-                user_id = result.get("userId", "")
                 pool_b64 = result.get("pool_b64", "")
 
                 if result.get("errors"):
@@ -325,25 +430,21 @@ class QDDecryptPanel(QWidget):
                 if qimei36:
                     self._sig.log.emit(f"✅ 提取 QIMEI36: {qimei36}")
                     collected.append("QIMEI36")
-                if user_id:
-                    self._sig.log.emit(f"✅ 提取 userId: {user_id}")
-                    collected.append("userId")
                 if pool_b64:
                     self._sig.log.emit(f"✅ 提取 Pool: {pool_b64[:40]}...")
                     collected.append("Pool")
 
-                if qimei36 or user_id or pool_b64:
+                if qimei36 or pool_b64:
                     cfg = load_config()
                     if qimei36:
                         cfg["qimei36"] = qimei36
-                    if user_id:
-                        cfg["userId"] = user_id
                     if pool_b64:
                         cfg["pool_b64"] = pool_b64
                     save_config(cfg)
-                    self._sig.params_ready.emit(qimei36, user_id, pool_b64)
+                    self._sig.params_ready.emit(qimei36, "", pool_b64)
 
-                self._sig.log.emit(f"🛠️ root 提取完成: {', '.join(collected)}")
+                summary = ", ".join(collected) if collected else "无可用参数"
+                self._sig.log.emit(f"🛠️ root 提取完成: {summary}")
             except Exception as e:
                 self._sig.error.emit(f"root 提取失败: {e}")
 
@@ -361,11 +462,13 @@ class QDDecryptPanel(QWidget):
 
         def _run():
             try:
-                from ...adb_utils import pull_device_files
+                from ...adb_utils import pull_device_files_auto
                 output = self._qd_default_dir()
                 self._qd_dir = output
                 self._sig.log.emit(f"正在从 {label} 拉取 .qd 文件...")
-                result = pull_device_files(output, device_serial=serial)
+                result = pull_device_files_auto(output, device_serial=serial)
+                mode = result.get("mode", "legacy")
+                self._sig.log.emit("使用快速拉取模式" if mode == "tar" else "使用逐文件拉取模式")
                 qd_count = result["qdFiles"]
                 self._sig.log.emit(f"拉取完成：{qd_count} 个文件")
                 self._scan_local_books(output)
@@ -487,7 +590,7 @@ class QDDecryptPanel(QWidget):
                 for ch in b["chapters"]:
                     size_kb = ch.get("size", 0) // 1024
                     ch_item = QTreeWidgetItem([ch["name"], ch["id"], f"{size_kb}KB"])
-                    ch_item.setData(0, Qt.ItemDataRole.UserRole, ("chapter", b["bookId"], ch))
+                    ch_item.setData(0, Qt.ItemDataRole.UserRole, ("chapter", b, ch))
                     ch_item.setFlags(ch_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                     ch_item.setCheckState(0, Qt.CheckState.Unchecked)
                     self._chapter_map[ch["id"]] = ch["name"]
@@ -558,21 +661,37 @@ class QDDecryptPanel(QWidget):
         self.btn_decrypt.setText(f"  上传解密选中章节 ({count})" if count else "  上传解密选中章节")
         self.btn_decrypt.setEnabled(count > 0)
 
-    # ── 解密（走服务端 API） ────────────────────────────────────────
-
-    def _do_decrypt(self):
-        chapters_to_decrypt = []
+    def _collect_selected_chapters(self) -> list[dict]:
+        selected = []
         for i in range(self.tree.topLevelItemCount()):
             user_item = self.tree.topLevelItem(i)
             for j in range(user_item.childCount()):
-                book = user_item.child(j)
-                for k in range(book.childCount()):
-                    ch = book.child(k)
-                    if ch.checkState(0) == Qt.CheckState.Checked:
-                        ch_data = ch.data(0, Qt.ItemDataRole.UserRole)
-                        if ch_data:
-                            _, bid, ch_info = ch_data
-                            chapters_to_decrypt.append((bid, ch_info["id"], ch_info["name"]))
+                book_item = user_item.child(j)
+                book_data = book_item.data(0, Qt.ItemDataRole.UserRole)
+                if not isinstance(book_data, dict):
+                    continue
+                for k in range(book_item.childCount()):
+                    ch_item = book_item.child(k)
+                    if ch_item.checkState(0) != Qt.CheckState.Checked:
+                        continue
+                    ch_data = ch_item.data(0, Qt.ItemDataRole.UserRole)
+                    if not (isinstance(ch_data, tuple) and len(ch_data) >= 3 and ch_data[0] == "chapter"):
+                        continue
+                    chapter = ch_data[2]
+                    chapter_id = str(chapter["id"])
+                    selected.append({
+                        "userId": str(book_data.get("userId", "")),
+                        "bookId": str(book_data["bookId"]),
+                        "bookDir": str(book_data.get("bookDir") or ""),
+                        "chapterId": chapter_id,
+                        "chapterName": chapter.get("name", chapter_id),
+                    })
+        return selected
+
+    # ── 解密（走服务端 API） ────────────────────────────────────────
+
+    def _do_decrypt(self):
+        chapters_to_decrypt = self._collect_selected_chapters()
 
         if not chapters_to_decrypt:
             return
@@ -584,40 +703,30 @@ class QDDecryptPanel(QWidget):
             try:
                 qimei = self.input_qimei.text().strip()
                 pool = self.input_pool.text().strip()
-                uid = self.input_userid.text().strip()
+                uid = chapters_to_decrypt[0].get("userId", "").strip()
+                session_ref = self._decrypt_session_ref
 
-                if not qimei or not pool or not uid:
-                    self._sig.error.emit("请先填写解密参数（QIMEI36/Pool/UserID）或点「加载」从配置读取")
+                if not session_ref and (not qimei or not pool):
+                    self._sig.error.emit("请先点「自动检测」获取解密参数，或填写 QIMEI36/Pool")
                     self._set_busy_from_thread(False)
                     return
 
-                # 按书籍从对应目录收集 .qd 文件
                 qd_files = []
-                for i in range(self.tree.topLevelItemCount()):
-                    user_item = self.tree.topLevelItem(i)
-                    for j in range(user_item.childCount()):
-                        book_item = user_item.child(j)
-                        bdata = book_item.data(0, Qt.ItemDataRole.UserRole)
-                        if not bdata:
-                            continue
-                        bid = bdata["bookId"]
-                        u_dir = bdata.get("userId", uid)
+                selected_by_chapter = {}
+                for chapter in chapters_to_decrypt:
+                    bid = chapter["bookId"]
+                    ch_id = chapter["chapterId"]
+                    book_dir = Path(chapter["bookDir"]) if chapter.get("bookDir") else Path(self._qd_dir) / chapter.get("userId", uid) / bid
+                    if not book_dir.exists():
+                        self._sig.log.emit(f"⚠ 未找到书籍目录: {chapter.get('userId', '')}/{bid}")
+                        continue
 
-                        book_chapters = [c for c in chapters_to_decrypt if c[0] == bid]
-                        if not book_chapters:
-                            continue
-
-                        book_dir = Path(self._qd_dir) / u_dir / bid
-                        if not book_dir.exists():
-                            self._sig.log.emit(f"⚠ 未找到书籍目录: {bid}")
-                            continue
-
-                        for ch_id, _ch_name in [(c[1], c[2]) for c in book_chapters]:
-                            fp = book_dir / f"{ch_id}.qd"
-                            if fp.exists():
-                                qd_files.append((str(fp), f"{bid}/{ch_id}.qd"))
-                            else:
-                                self._sig.log.emit(f"⚠ 未找到章节文件: {bid}/{ch_id}.qd")
+                    fp = book_dir / f"{ch_id}.qd"
+                    if fp.exists():
+                        qd_files.append((str(fp), _qd_zip_arcname(chapter)))
+                        selected_by_chapter[ch_id] = {**chapter, "bookDir": str(book_dir)}
+                    else:
+                        self._sig.log.emit(f"⚠ 未找到章节文件: {chapter.get('userId', '')}/{bid}/{ch_id}.qd")
 
                 if not qd_files:
                     self._sig.error.emit("未找到对应的 .qd 文件")
@@ -632,16 +741,14 @@ class QDDecryptPanel(QWidget):
                         zf.write(fp, arcname)
 
                 self._sig.log.emit(f"已打包 {len(qd_files)} 个文件，上传服务端解密...")
-                result = self.client.decrypt_qd_zip(zip_path, qimei, uid, pool)
+                if session_ref:
+                    result = self.client.decrypt_qd_zip(zip_path, decrypt_session_ref=session_ref)
+                else:
+                    result = self.client.decrypt_qd_zip(zip_path, qimei, uid, pool)
                 result_zip = result["zip_path"]
                 task_id = result.get("task_id")
                 if task_id:
                     self._sig.log.emit(f"解密任务 ID: {task_id}")
-
-                # 构建 chapterId → bookId 映射
-                ch_to_bid = {}
-                for bid, ch_id, _ in chapters_to_decrypt:
-                    ch_to_bid[ch_id] = bid
 
                 success = 0
                 failed = 0
@@ -662,44 +769,33 @@ class QDDecryptPanel(QWidget):
 
                         # 服务端返回扁平文件名: {chapterId}.txt
                         chapter_id = name.replace(".txt", "")
-                        bid = ch_to_bid.get(chapter_id)
-                        if not bid:
+                        target = selected_by_chapter.get(chapter_id)
+                        if not target:
                             self._sig.log.emit(f"⚠ 未知章节 ID: {chapter_id}，跳过")
                             failed += 1
                             continue
 
-                        # 查找对应书籍目录
-                        for i in range(self.tree.topLevelItemCount()):
-                            user_item = self.tree.topLevelItem(i)
-                            for j in range(user_item.childCount()):
-                                book_item = user_item.child(j)
-                                bdata = book_item.data(0, Qt.ItemDataRole.UserRole)
-                                if not bdata or bdata["bookId"] != bid:
-                                    continue
-                                u_path = bdata.get("userId", uid)
-                                book_dir = Path(self._qd_dir) / u_path / bid
-
-                                # 用有序章节名重命名输出文件
-                                name_map = _load_chapter_names(book_dir, bid)
-                                entry = name_map.get(chapter_id, None)
-                                if entry:
-                                    order_num, ch_name = entry
-                                    safe_name = _sanitize_filename(ch_name)
-                                    digits = name_map.get("_digits", 0)
-                                    out_name = f"{order_num:0{digits}d}. {safe_name}.txt" if digits else name
-                                else:
-                                    out_name = name
-                                out_path = book_dir / out_name
-                                counter = 1
-                                while out_path.exists():
-                                    out_path = book_dir / f"{out_path.stem}_{counter}.txt"
-                                    counter += 1
-                                out_path.write_bytes(zf.read(name))
-                                success += 1
-                                by_book.setdefault(bid, 0)
-                                by_book[bid] += 1
-                                self._sig.log.emit(f"✅ {out_name}")
-                                break
+                        bid = target["bookId"]
+                        book_dir = Path(target["bookDir"])
+                        name_map = _load_chapter_names(book_dir, bid)
+                        entry = name_map.get(chapter_id, None)
+                        if entry:
+                            order_num, ch_name = entry
+                            safe_name = _sanitize_filename(ch_name)
+                            digits = name_map.get("_digits", 0)
+                            out_name = f"{order_num:0{digits}d}. {safe_name}.txt" if digits else name
+                        else:
+                            out_name = name
+                        out_path = book_dir / out_name
+                        counter = 1
+                        while out_path.exists():
+                            out_path = book_dir / f"{out_path.stem}_{counter}.txt"
+                            counter += 1
+                        out_path.write_bytes(zf.read(name))
+                        success += 1
+                        by_book.setdefault(bid, 0)
+                        by_book[bid] += 1
+                        self._sig.log.emit(f"✅ {out_name}")
 
                 by_book_str = ", ".join(f"{k}: {v}章" for k, v in by_book.items())
                 self._pending_open_dir = self._qd_dir or self._qd_default_dir()
@@ -821,23 +917,41 @@ class QDDecryptPanel(QWidget):
 
     def _load_config(self):
         try:
-            from ...adb_utils import load_config
-            cfg = load_config()
+            cfg = _load_adb_config()
             self.input_qimei.setText(cfg.get("qimei36", ""))
             self.input_pool.setText(cfg.get("pool_b64", ""))
-            self.input_userid.setText(cfg.get("userId", ""))
+            self._decrypt_session_ref = cfg.get("decryptSessionRef", "")
+            if self._decrypt_session_ref:
+                self._seed_status = "已就绪"
+                self.label_seed_status.setText("已就绪")
+            self._update_param_inputs_state()
             self._append_log("✅ 已加载解密配置")
         except Exception as e:
             self._append_log(f"❌ 加载配置失败: {e}")
 
+    def _load_config_silent(self):
+        """Auto-load config on startup without logging."""
+        try:
+            cfg = _load_adb_config()
+            self._decrypt_session_ref = cfg.get("decryptSessionRef", "")
+            if self._decrypt_session_ref:
+                self._seed_status = "已就绪"
+                self.label_seed_status.setText("已就绪")
+            self._update_param_inputs_state()
+        except Exception:
+            pass
+
     def _save_config(self):
         try:
-            from ...adb_utils import save_config
-            save_config({
-                "qimei36": self.input_qimei.text().strip(),
-                "pool_b64": self.input_pool.text().strip(),
-                "userId": self.input_userid.text().strip(),
-            })
+            cfg = _load_adb_config()
+            # Preserve existing decryptSessionRef if not overwritten
+            if self._decrypt_session_ref:
+                cfg["decryptSessionRef"] = self._decrypt_session_ref
+            if self.input_qimei.text().strip():
+                cfg["qimei36"] = self.input_qimei.text().strip()
+            if self.input_pool.text().strip():
+                cfg["pool_b64"] = self.input_pool.text().strip()
+            _save_adb_config(cfg)
             self._append_log("✅ 配置已保存")
         except Exception as e:
             self._append_log(f"❌ 保存失败: {e}")
@@ -852,10 +966,15 @@ class QDDecryptPanel(QWidget):
     def _fill_params(self, qimei36: str, user_id: str, pool_b64: str):
         if qimei36:
             self.input_qimei.setText(qimei36)
-        if user_id:
-            self.input_userid.setText(user_id)
         if pool_b64:
             self.input_pool.setText(pool_b64)
+
+    def _update_param_inputs_state(self):
+        """有 decryptSessionRef 时禁用手动输入框，防止误输入冲突参数。"""
+        disabled = bool(self._decrypt_session_ref)
+        for w in (self.input_qimei, self.input_pool):
+            w.setEnabled(not disabled)
+            w.setToolTip("" if not disabled else "已通过自动检测获取解密参数，无需手动填写")
 
     def _apply_book_name(self, book_id: str, book_name: str):
         for i in range(self.tree.topLevelItemCount()):

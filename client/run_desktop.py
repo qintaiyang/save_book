@@ -6,7 +6,8 @@ app_dir = os.path.dirname(os.path.abspath(__file__))
 if app_dir not in sys.path:
     sys.path.insert(0, app_dir)
 
-if len(sys.argv) > 1:
+desktop_flags = {"--debug", "-debug"}
+if len(sys.argv) > 1 and not set(sys.argv[1:]).issubset(desktop_flags):
     # 有命令行参数 → CLI 模式
     from qidian_save.cli import main as cli_main
     cli_main()

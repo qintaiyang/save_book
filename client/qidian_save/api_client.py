@@ -213,11 +213,71 @@ class QidianSaveClient:
     def cleanup_task(self, task_id: int) -> dict:
         return self._delete(f"/api/backup/{task_id}")
 
+    # ── APK Backup Open API ──
+
+    def create_apk_login_session(self, account: str, password: str,
+                                 client_meta: dict = None) -> dict:
+        return self._post("/api/v1/apk/login/session", json={
+            "account": account,
+            "password": password,
+            "clientMeta": client_meta or {},
+        })
+
+    def get_apk_login_session(self, session_id: int) -> dict:
+        return self._get(f"/api/v1/apk/login/session/{session_id}")
+
+    def submit_apk_login_challenge(self, session_id: int, payload: dict,
+                                   target_ref: dict = None,
+                                   start_task: bool = False) -> dict:
+        body = dict(payload or {})
+        if target_ref is not None:
+            body["targetRef"] = target_ref
+        if start_task:
+            body["startTask"] = True
+        return self._post(
+            f"/api/v1/apk/login/session/{session_id}/challenge",
+            json=body,
+        )
+
+    def create_apk_backup_task(self, session_id: int,
+                               target_ref: dict = None) -> dict:
+        return self._post("/api/v1/apk/tasks", json={
+            "sessionId": session_id,
+            "targetRef": target_ref or {},
+        })
+
+    def get_apk_task(self, task_id: int) -> dict:
+        return self._get(f"/api/v1/apk/tasks/{task_id}")
+
+    def list_apk_task_artifacts(self, task_id: int) -> list:
+        data = self._get(f"/api/v1/apk/tasks/{task_id}/artifacts")
+        return data.get("artifacts", [])
+
+    def download_apk_artifact(self, task_id: int, artifact_id: int) -> bytes:
+        resp = self.session.get(
+            f"{self.base_url}/api/v1/apk/tasks/{task_id}/artifacts/{artifact_id}",
+            timeout=300,
+        )
+        self._raise_on_error(resp)
+        return resp.content
+
+    def delete_apk_task(self, task_id: int) -> dict:
+        return self._delete(f"/api/v1/apk/tasks/{task_id}")
+
+    def get_qidian_bookshelf(self, session_id: int) -> dict:
+        """通过服务端 App API 获取起点书架."""
+        return self._post("/api/qidian/bookshelf", json={"session_id": int(session_id)})
+
     # ── .qd Decrypt — Zip workflow ──
 
-    def decrypt_qd_zip(self, zip_path: str, qimei36: str, user_id: str,
-                       pool_b64: str, output_path: str = None) -> dict:
-        """上传 .qd 文件的 zip 压缩包到服务器，下载解密后的 zip
+    def decrypt_qd_zip(self, zip_path: str, qimei36: str = "", user_id: str = "",
+                       pool_b64: str = "", output_path: str = None,
+                       decrypt_session_ref: str = "") -> dict:
+        """上传 .qd 文件的 zip 压缩包，批量解密后下载解密结果 zip。
+
+        支持两种鉴权方式：
+        1. qimei36 + userId + poolB64
+        2. decryptSessionRef（从种子文件上传获取）
 
         Args:
             zip_path: .qd 文件的 zip 压缩包路径
@@ -225,6 +285,7 @@ class QidianSaveClient:
             user_id: 起点用户 ID
             pool_b64: base64 编码的密钥池
             output_path: 解密结果 zip 保存路径（默认自动生成）
+            decrypt_session_ref: 解密会话引用（替代 qimei36+userId+poolB64）
 
         Returns:
             {"zip_path": str, "task_id": str | None}
@@ -232,9 +293,16 @@ class QidianSaveClient:
         if output_path is None:
             output_path = zip_path.rsplit(".", 1)[0] + "_decrypted.zip"
 
+        data = {"accept": "zip"}
+        if decrypt_session_ref:
+            data["decryptSessionRef"] = decrypt_session_ref
+        else:
+            data["qimei36"] = qimei36
+            data["userId"] = user_id
+            data["poolB64"] = pool_b64
+
         with open(zip_path, "rb") as f:
             files = {"file": (os.path.basename(zip_path), f, "application/zip")}
-            data = {"qimei36": qimei36, "userId": user_id, "poolB64": pool_b64}
             resp = self.session.post(
                 f"{self.base_url}/api/decrypt/qd-zip",
                 files=files, data=data, timeout=300,
@@ -248,19 +316,46 @@ class QidianSaveClient:
 
         return {"zip_path": output_path, "task_id": task_id}
 
-    def decrypt_qd(self, file_path: str, qimei36: str, user_id: str,
-                   pool_b64: str) -> dict:
-        """上传单个 .qd 文件到服务端解密（单文件模式，兼容旧版 API）
+    def decrypt_qd(self, file_path: str, qimei36: str = "", user_id: str = "",
+                   pool_b64: str = "", decrypt_session_ref: str = "") -> dict:
+        """上传单个 .qd 文件到服务端解密（单文件模式）
+
+        支持两种鉴权方式：
+        1. qimei36 + userId + poolB64
+        2. decryptSessionRef（从种子文件上传获取）
 
         Returns:
             {"decodedText": str, "taskId": int | None, ...}
         """
+        filename = os.path.basename(file_path)
         with open(file_path, "rb") as f:
-            files = {"file": (file_path, f, "application/octet-stream")}
-            data = {"qimei36": qimei36, "userId": user_id, "poolB64": pool_b64}
+            files = {"file": (filename, f, "application/octet-stream")}
+            data = {}
+            if decrypt_session_ref:
+                data["decryptSessionRef"] = decrypt_session_ref
+            else:
+                data["qimei36"] = qimei36
+                data["userId"] = user_id
+                data["poolB64"] = pool_b64
             resp = self.session.post(
                 f"{self.base_url}/api/decrypt/qd",
                 files=files, data=data, timeout=60,
+            )
+            self._raise_on_error(resp)
+            return resp.json()
+
+
+    def create_qd_seed_session(self, file_path: str) -> dict:
+        """上传 TypeB .qd 种子文件，创建解密会话。
+
+        Returns:
+            {"decryptSessionRef": str, "seedUserId": str, ...}
+        """
+        with open(file_path, "rb") as f:
+            files = {"file": (file_path, f, "application/octet-stream")}
+            resp = self.session.post(
+                f"{self.base_url}/api/qd-seed/sessions",
+                files=files, timeout=120,
             )
             self._raise_on_error(resp)
             return resp.json()

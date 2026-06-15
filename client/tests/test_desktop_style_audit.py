@@ -24,6 +24,7 @@ class DesktopStyleAuditTests(unittest.TestCase):
             "bookshelf_panel.py",
             "book_detail_panel.py",
             "backup_panel.py",
+            "apk_backup_panel.py",
             "qd_decrypt_panel.py",
             "usage_panel.py",
         }

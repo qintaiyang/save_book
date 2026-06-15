@@ -32,9 +32,23 @@ def _mobile_get(url: str, params: dict = None, cookies: dict = None,
     return None
 
 
-def search_books(keyword: str, page: int = 1) -> list[dict]:
-    """搜索书籍 — 直调 m.qidian.com/search"""
-    log(f"搜索: keyword={keyword}, page={page}")
+def search_books(keyword: str, page: int = 1, client=None) -> list[dict]:
+    """搜索书籍
+
+    Args:
+        keyword: 搜索关键词
+        page: 页码
+        client: QidianSaveClient 实例。传此参数时走服务端代理模式，
+                否则走 H5 直调。
+
+    Returns:
+        [{bookId, bookName, authorName}, ...]  — 与旧版一致的结果格式
+    """
+    if client is not None:
+        return _search_via_server(keyword, client)
+
+    # H5 直调是当前默认搜索路径；服务端代理仅在显式传 client 时使用。
+    log(f"搜索 (H5 直调): keyword={keyword}, page={page}")
     resp = _mobile_get("https://m.qidian.com/search", {"kw": keyword, "page": page})
     if not resp:
         log("搜索: 无响应")
@@ -53,6 +67,33 @@ def search_books(keyword: str, page: int = 1) -> list[dict]:
     log(f"搜索: 找到 {len(results)} 个结果")
     if not results:
         log(f"搜索: 响应前300字: {resp.text[:300]}")
+    return results
+
+
+def _search_via_server(keyword: str, client) -> list[dict]:
+    """通过 save_book_server 搜索代理接口搜索书籍"""
+    log(f"搜索 (服务端代理): keyword={keyword}")
+    try:
+        resp = client._post("/api/qidian/search", json={
+            "keyword": keyword,
+            "page_index": 1,
+            "page_size": 20,
+        })
+    except Exception as e:
+        log(f"搜索 (服务端代理): 失败 — {e}")
+        raise
+
+    items = resp.get("items", [])
+    # 映射服务端新字段 → 旧版客户端字段
+    results = []
+    for item in items:
+        results.append({
+            "bookId": item.get("book_id", ""),
+            "bookName": item.get("book_name", ""),
+            "authorName": item.get("author_name", ""),
+        })
+
+    log(f"搜索 (服务端代理): 找到 {len(results)} 个结果")
     return results
 
 

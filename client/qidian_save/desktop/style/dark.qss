@@ -271,3 +271,20 @@ QToolTip {
     border-radius: 7px;
     padding: 6px 9px;
 }
+
+/* ── 登录状态点 ────────────────────────────────────────── */
+QLabel#loginStatusDot {
+    min-width: 10px;
+    max-width: 10px;
+    min-height: 10px;
+    max-height: 10px;
+    border-radius: 5px;
+}
+
+QLabel#loginStatusDot[login-state="online"] {
+    background: #22C55E;
+}
+
+QLabel#loginStatusDot[login-state="offline"] {
+    background: #EF4444;
+}

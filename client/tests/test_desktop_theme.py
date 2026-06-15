@@ -4,6 +4,7 @@ import unittest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtWidgets import QApplication
+from qfluentwidgets import Theme
 
 from qidian_save.desktop.components import PageHeader, StatCard, SurfaceCard
 from qidian_save.desktop.theme import DARK_TOKENS, DESIGN_TOKENS, load_qss
@@ -48,6 +49,16 @@ class DesktopThemeTests(unittest.TestCase):
             '[ui-role="surface-card"]',
             '[ui-role="stat-card"]',
             '[ui-role="empty-state"]',
+        ):
+            self.assertIn(selector, qss)
+
+    def test_light_qss_styles_core_semantic_roles(self):
+        qss = load_qss(Theme.LIGHT)
+        for selector in (
+            '[ui-role="page-header"]',
+            '[ui-role="surface-card"]',
+            '[ui-role="stat-card"]',
+            '[ui-role="section-title"]',
         ):
             self.assertIn(selector, qss)
 

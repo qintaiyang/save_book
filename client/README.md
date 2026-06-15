@@ -1,125 +1,120 @@
-# qidian_save
+# 点备客户端
 
-**起点中文网书籍本地保存工具 — 桌面端 + CLI**
+**起点中文网书籍备份工具，支持在线备份、本地备份、书籍搜索和书架读取。**
 
-A local backup tool for Qidian Chinese novels — Desktop GUI + CLI.
+![点备项目图](../docs/assets/dianbei-app.png)
 
 [![QQ Group](https://img.shields.io/badge/QQ群-1035658850-blue)](https://qm.qq.com/q/xYfDqmUUrS)
 
----
+## 交流群
 
-## 交流群 / Community
+QQ 群：1035658850
+链接：[加入群聊](https://qm.qq.com/q/xYfDqmUUrS)
 
-📱 **QQ 群：1035658850** [点击链接加入群聊【内测】](https://qm.qq.com/q/xYfDqmUUrS)
+## 免责声明
 
----
+点备用于备份用户在起点中文网已购买或有权阅读的章节内容，仅限个人学习、研究和合法备份使用。用户应自行遵守起点中文网服务条款以及所在地法律法规。开发者不对用户的使用行为承担责任。
 
-## 免责声明 / Disclaimer
+## 客户端定位
 
-**中文：** 本工具用于备份用户在起点中文网已购买的章节内容，仅限个人合法使用。用户应自行遵守起点中文网服务条款。开发者不对用户的使用行为承担任何责任。
+本仓库中的客户端是开源实现，负责用户界面、登录引导、搜索、书架展示、任务提交、ADB 拉取和结果下载。签名、解码、逆向相关实现不放在客户端仓库中。
 
-**English:** This tool is intended for backing up chapters you have legally purchased on Qidian. Personal use only. Users must comply with Qidian's Terms of Service. The developer assumes no responsibility for user actions.
+服务端提供开放 API，第三方客户端可以按接口规范自行接入。
 
----
+## 主要功能
 
-## 功能 / Features
+| 功能 | 说明 |
+|------|------|
+| 起点登录 | 支持账号密码、短信验证码等登录流程；登录状态有效期内重启客户端无需重新登录 |
+| 搜索书籍 | 按关键词搜索书籍，查看书籍详情和目录 |
+| 书架读取 | 使用当前起点登录会话读取书架 |
+| 在线备份 | 在客户端选择书籍和章节，由服务端完成在线备份，客户端下载结果 |
+| 本地备份 | 从 Android 设备拉取本地缓存章节，上传到服务端处理后保存为可阅读文本 |
+| 用量查询 | 查看当前账号的每日使用额度 |
+| 调试模式 | 通过 `--debug` 显示慢速备份、网页 Cookie 登录等高级调试入口 |
 
-| 中文 | English |
-|------|---------|
-| 搜索书籍 | Search Qidian novels |
-| 起点扫码登录 | QR code login to Qidian |
-| 书籍备份（选择章节 → 服务端解码 → 下载 TXT/HTML） | Backup chapters (select → server decode → download TXT/HTML) |
-| .qd 解密（Android 加密章节文件解密） | .qd decryption (Android encrypted chapter files) |
-| 用量查询 | Daily usage query |
+## 安装与启动
 
----
-
-## 快速开始 / Quick Start
-
-### 桌面端 / Desktop
+在仓库根目录：
 
 ```bash
-# 1. 安装依赖 / Install dependencies
-pip install -e .
+pip install -e client
+python run_desktop.py
+```
 
-# 2. 启动桌面端 / Launch desktop
+或进入客户端目录：
+
+```bash
+cd client
+pip install -e .
 python -m qidian_save desktop
 ```
 
-> Windows 用户也可双击 `start.bat` 一键启动。
->
-> Windows users can also double-click `start.bat`.
-
-首次启动会弹出 GitHub 登录对话框，登录后即可使用。
-
-On first launch, log in via GitHub to get started.
-
-### 系统要求 / Requirements
-
-- **Python 3.9+**
-- **ADB (Android Debug Bridge)** — Bundled at `client/adb/`, no manual install
-- For .qd decryption: A rooted Android device or emulator
-
----
-
-## CLI 命令 / Commands
+调试模式：
 
 ```bash
-# 登录 / Login
+python -m qidian_save desktop --debug
+```
+
+## 系统要求
+
+- Python 3.10+
+- Windows、macOS 或 Linux
+- 本地备份需要 Android 设备开启 USB 调试
+- ADB 已随客户端附带，通常不需要手动安装
+
+## 推荐流程
+
+1. 打开点备客户端。
+2. 在“登录”页面登录点备账号和起点账号。
+3. 在“搜索书籍”或“书架”页面选择书籍。
+4. 使用“在线备份”创建任务并下载结果。
+5. 如需备份手机本地缓存，连接 Android 设备后使用“本地备份”。
+
+## CLI
+
+桌面版是推荐入口，CLI 主要用于自动化和调试。
+
+```bash
+# 登录点备账号
 python -m qidian_save login
 
-# 搜索 / Search
-python -m qidian_save search <keyword>
+# 启动桌面版
+python -m qidian_save desktop
+python -m qidian_save desktop --debug
 
-# 目录 / Catalog
+# 搜索与目录
+python -m qidian_save search <keyword>
 python -m qidian_save catalog <book_id>
 
-# 备份 / Backup
+# 在线备份
 python -m qidian_save backup <book_id>
+python -m qidian_save backup <book_id> --start 1 --end 20
+python -m qidian_save backup <book_id> --merge
 
-# .qd 解密 / Decrypt
-python -m qidian_save decrypt <file.qd>
-python -m qidian_save decrypt <dir/>
+# ADB 本地备份辅助
+python -m qidian_save adb-scan
+python -m qidian_save adb-pull
+python -m qidian_save adb-extract
 
-# ADB 操作 / ADB operations
-python -m qidian_save adb-extract        # root 提取解密参数 / extract decryption params
-python -m qidian_save adb-scan           # 扫描 .qd 文件 / scan .qd files
-python -m qidian_save adb-pull           # 拉取 .qd 文件 / pull .qd files
-
-# 其他 / Other
-python -m qidian_save usage              # 查看用量 / check usage
-python -m qidian_save qd-config          # 查看/设置配置 / view/set config
+# 用量
+python -m qidian_save usage
 ```
 
----
+## 环境变量
 
-## 环境变量 / Environment Variables
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `QIDIAN_SAVE_URL` | 点备服务端地址 | `https://autohelp.asia/` |
+| `QIDIAN_SAVE_TOKEN` | 点备账号 JWT，用于自动登录 | 空 |
 
-| 变量 / Variable | 说明 / Description | 默认值 / Default |
-|----------------|-------------------|----------------|
-| `QIDIAN_SAVE_URL` | 服务端地址 / Server URL | `https://autohelp.asia/` |
-| `QIDIAN_SAVE_TOKEN` | JWT Token（自动登录 / auto-login） | - |
-| `QIDIAN_SAVE_API_KEY` | API Key（商业用户 / commercial） | - |
+## 隐私与安全边界
 
----
+- 客户端仓库开源，不包含签名、解码、逆向算法。
+- 客户端不会保存起点账号密码、起点 Cookie 或 `ywkey`。
+- 客户端只会在本地缓存服务端登录会话 ID、阶段和过期时间。
+- 服务端负责保存和处理必要的敏感会话信息。
 
-## API 集成 / API Integration
+## License
 
-商业用户可使用 API Key 集成到自己的项目：
-
-Commercial users can integrate via API Key:
-
-```python
-from qidian_save import QidianSaveClient
-
-client = QidianSaveClient(
-    "https://your-server.com",
-    api_key="your-api-key"
-)
-usage = client.get_usage()  # 查看今日用量 / check daily usage
-announcements = client.get_announcements()  # 获取公告 / fetch announcements
-```
-
-服务端 API 文档（Swagger UI）：[https://autohelp.asia/docs](https://autohelp.asia/docs)
-
-Server API docs (Swagger UI): [https://autohelp.asia/docs](https://autohelp.asia/docs)
+MIT

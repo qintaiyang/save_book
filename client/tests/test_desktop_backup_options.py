@@ -24,7 +24,7 @@ class DesktopBackupOptionsTests(unittest.TestCase):
         )
         options = panel._backup_options()
         self.assertTrue(options["preview_enabled"])
-        self.assertTrue(options["merge_enabled"])
+        self.assertFalse(options["merge_enabled"])
         self.assertEqual(options["proxy_urls"], [
             "http://one.example:8080",
             "socks5://two.example:1080",
