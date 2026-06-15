@@ -31,9 +31,11 @@ class BookDetailPanel(QWidget):
         on_backup_started,
         get_apk_session_id=None,
         on_apk_task_started=None,
+        debug_mode: bool = False,
     ):
         super().__init__()
         self.client = client
+        self.debug_mode = bool(debug_mode)
         # on_backup_started(task_id, server_crawl, book_id, qd_cookies)
         self.on_backup_started = on_backup_started
         self.get_apk_session_id = get_apk_session_id or (lambda: 0)
@@ -53,7 +55,7 @@ class BookDetailPanel(QWidget):
     def _init_ui(self):
         layout = configure_page_layout(self)
         layout.addWidget(PageHeader(
-            "书籍详情", "选择章节并创建在线或本地备份任务", "BOOK WORKSPACE"
+            "书籍详情", "选择章节并创建在线备份任务", "BOOK WORKSPACE"
         ))
 
         # Book info card
@@ -114,8 +116,8 @@ class BookDetailPanel(QWidget):
         self.chk_preview.setChecked(True)
         option_row.addWidget(self.chk_preview)
 
-        self.chk_merge = QCheckBox("生成合并 TXT")
-        self.chk_merge.setChecked(True)
+        self.chk_merge = QCheckBox("合并为一个 TXT")
+        self.chk_merge.setChecked(False)
         option_row.addWidget(self.chk_merge)
         option_row.addStretch()
         option_layout.addLayout(option_row)
@@ -126,6 +128,9 @@ class BookDetailPanel(QWidget):
         )
         self.proxy_input.setClearButtonEnabled(True)
         option_layout.addWidget(self.proxy_input)
+        # 普通模式隐藏代理和 chk_preview，但保留 chk_merge
+        for w in (self.chk_preview, self.proxy_input):
+            w.setVisible(self.debug_mode)
         layout.addWidget(options)
 
         # ── Bottom controls: select-all + backup ──
@@ -141,9 +146,12 @@ class BookDetailPanel(QWidget):
         cr.addWidget(self.btn_select_all)
 
         self.chk_server_crawl = QCheckBox("服务器抓取")
+        self.chk_server_crawl.setVisible(self.debug_mode)
         cr.addWidget(self.chk_server_crawl)
 
-        self.chk_apk_backup = QCheckBox("快速备份")
+        self.chk_apk_backup = QCheckBox("在线备份")
+        self.chk_apk_backup.setChecked(True)
+        self.chk_apk_backup.setVisible(self.debug_mode)
         cr.addWidget(self.chk_apk_backup)
 
         self.label_selected = QLabel("已选 0 章")
@@ -152,7 +160,7 @@ class BookDetailPanel(QWidget):
 
         cr.addStretch()
 
-        self.btn_backup = QPushButton("  开始备份")
+        self.btn_backup = QPushButton("  开始在线备份")
         self.btn_backup.setProperty("btn-type", "primary")
         self.btn_backup.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_backup.clicked.connect(self._start_backup)
@@ -295,12 +303,13 @@ class BookDetailPanel(QWidget):
             "wholeBook": len(chapter_ids) == len(self._chapters) and bool(chapter_ids),
             "downloadMode": "batch",
             "timeout": 60,
+            "mergeText": self.chk_merge.isChecked(),
         }
 
     def _start_apk_backup(self, checked_indices: list[int]):
         session_id = int(self.get_apk_session_id() or 0)
         if not session_id:
-            QMessageBox.warning(self, "提示", "请先到“快速备份”页面完成账号验证")
+            QMessageBox.warning(self, "提示", "请先到“登录”页面完成起点账号登录")
             return
         try:
             target_ref = self._build_apk_target_ref(checked_indices)
@@ -340,7 +349,7 @@ class BookDetailPanel(QWidget):
 
         # 传递实际勾选的行号（0-based），不再转换为 start/end 范围
         checked_indices = sorted(checked_rows)
-        if self.chk_apk_backup.isChecked():
+        if (not self.debug_mode) or self.chk_apk_backup.isChecked():
             self._start_apk_backup(checked_indices)
             return
 
@@ -405,7 +414,7 @@ class BookDetailPanel(QWidget):
 
     def _on_backup_finished(self):
         self.btn_backup.setEnabled(True)
-        self.btn_backup.setText("  开始备份")
+        self.btn_backup.setText("  开始在线备份")
 
     def _on_backup_done(
         self,

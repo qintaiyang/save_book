@@ -38,7 +38,8 @@ def _load_token() -> str:
 def cmd_desktop(args):
     """启动桌面版"""
     from .desktop.app import main
-    main()
+    argv = ["--debug"] if getattr(args, "debug", False) else []
+    main(argv)
 
 def _get_client(args) -> QidianSaveClient:
     base = os.getenv("QIDIAN_SAVE_URL", "https://autohelp.asia/")
@@ -658,6 +659,7 @@ def build_parser():
     p_adb_db.set_defaults(func=cmd_adb_db)
 
     p_desk = sub.add_parser("desktop", help="启动桌面版")
+    p_desk.add_argument("--debug", action="store_true", help="显示慢速备份和高级调试控件")
     p_desk.set_defaults(func=cmd_desktop)
 
     return p

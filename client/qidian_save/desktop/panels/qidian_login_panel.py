@@ -59,7 +59,7 @@ class QidianLoginPanel(QWidget):
     def _init_ui(self):
         layout = configure_page_layout(self)
         layout.addWidget(PageHeader(
-            "起点扫码", "使用起点 App 完成登录，Cookie 仅保存在本地", "ACCOUNT LINK"
+            "网页 Cookie 登录（调试）", "使用起点 App 扫码，Cookie 仅保存在本地", "ACCOUNT LINK (DEBUG)"
         ))
 
         section = SurfaceCard()

@@ -90,7 +90,7 @@ class QDDecryptPanel(QWidget):
     def _init_ui(self):
         layout = configure_page_layout(self, margins=(24, 20, 24, 20), spacing=12)
         layout.addWidget(PageHeader(
-            ".qd 解密",
+            "本地备份",
             "连接设备、拉取章节并上传服务端完成解密",
             "DEVICE WORKSPACE",
         ))

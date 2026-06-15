@@ -47,6 +47,7 @@ def test_main_window_registers_apk_decrypt_backup_panel():
     assert isinstance(window.panels["apk_backup"], ApkBackupPanel)
     assert window.panels["apk_backup"].objectName() == "panel_apk_backup"
     assert any(window.stackedWidget.widget(i) is window.panels["apk_backup"] for i in range(window.stackedWidget.count()))
+    assert not any(window.stackedWidget.widget(i) is window.panels["backup"] for i in range(window.stackedWidget.count()))
 
 
 def test_main_window_wires_apk_session_into_book_detail_panel():
@@ -56,3 +57,10 @@ def test_main_window_wires_apk_session_into_book_detail_panel():
     window._on_apk_session_authenticated(42)
     assert window.apk_session_id == 42
     assert window.panels["detail"].get_apk_session_id() == 42
+
+
+def test_main_window_debug_mode_registers_slow_backup_panel():
+    from qidian_save.desktop.app import MainWindow
+
+    window = MainWindow(FakeApiClient(), token="test-token", debug_mode=True)
+    assert any(window.stackedWidget.widget(i) is window.panels["backup"] for i in range(window.stackedWidget.count()))

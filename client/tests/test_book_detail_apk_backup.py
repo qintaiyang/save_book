@@ -18,10 +18,20 @@ from qidian_save.desktop.panels.book_detail_panel import BookDetailPanel
 class FakeClient:
     def __init__(self):
         self.last_apk_task = None
+        self.upload_called = False
+        self.start_backup_called = False
 
     def create_apk_backup_task(self, session_id, target_ref=None):
         self.last_apk_task = (session_id, target_ref)
         return {"taskId": 88}
+
+    def upload_qidian_cookies(self, cookies):
+        self.upload_called = True
+        raise AssertionError("slow backup cookie upload should not run in beginner mode")
+
+    def start_backup(self, *args, **kwargs):
+        self.start_backup_called = True
+        raise AssertionError("slow backup should not run in beginner mode")
 
 
 class BookDetailApkBackupTests(unittest.TestCase):
@@ -30,15 +40,16 @@ class BookDetailApkBackupTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def _panel(self, session_id=7):
+        client = FakeClient()
         return BookDetailPanel(
-            FakeClient(),
+            client,
             lambda *args, **kwargs: None,
             get_apk_session_id=lambda: session_id,
             on_apk_task_started=lambda *_args, **_kwargs: None,
-        )
+        ), client
 
     def test_apk_mode_builds_target_ref_from_selected_chapters(self):
-        panel = self._panel()
+        panel, _client = self._panel()
         panel.load_book_context("book-1", "测试书")
         panel._on_catalog({
             "authorName": "作者",
@@ -73,6 +84,48 @@ class BookDetailApkBackupTests(unittest.TestCase):
         with patch("qidian_save.desktop.panels.book_detail_panel.QMessageBox.warning") as warn:
             panel._start_backup()
         warn.assert_called()
+
+    def test_beginner_mode_defaults_to_fast_backup_and_skips_cookie_upload(self):
+        panel, client = self._panel()
+        panel.load_book_context("book-1", "测试书")
+        panel._on_catalog({
+            "authorName": "作者",
+            "totalChapters": 1,
+            "chapters": [{"chapterId": "101", "chapterName": "第一章", "isVip": False}],
+        })
+        panel.table.item(0, 0).setCheckState(Qt.CheckState.Checked)
+
+        class ImmediateThread:
+            def __init__(self, target, daemon=None):
+                self.target = target
+
+            def start(self):
+                self.target()
+
+        with patch("qidian_save.desktop.panels.book_detail_panel.threading.Thread", ImmediateThread):
+            panel._start_backup()
+
+        self.assertEqual(client.last_apk_task[0], 7)
+        self.assertEqual(client.last_apk_task[1]["chapterIds"], [101])
+        self.assertFalse(client.upload_called)
+        self.assertFalse(client.start_backup_called)
+
+    def test_beginner_mode_hides_slow_backup_controls(self):
+        panel, _client = self._panel()
+        self.assertTrue(panel.chk_apk_backup.isChecked())
+        self.assertTrue(panel.chk_apk_backup.isHidden())
+        self.assertTrue(panel.chk_server_crawl.isHidden())
+
+    def test_debug_mode_shows_slow_backup_controls(self):
+        panel = BookDetailPanel(
+            FakeClient(),
+            lambda *args, **kwargs: None,
+            get_apk_session_id=lambda: 7,
+            on_apk_task_started=lambda *_args, **_kwargs: None,
+            debug_mode=True,
+        )
+        self.assertFalse(panel.chk_apk_backup.isHidden())
+        self.assertFalse(panel.chk_server_crawl.isHidden())
 
 
 if __name__ == "__main__":

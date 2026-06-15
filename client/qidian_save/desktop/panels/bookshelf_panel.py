@@ -131,7 +131,7 @@ class BookshelfPanel(QWidget):
             self.on_select_book(book["id"], book["name"])
 
     def _on_no_cookies(self):
-        self.status_label.setText("未登录起点 — 请先到「起点扫码」面板扫码登录")
+        self.status_label.setText("未登录起点 — 请先到「登录」页面完成起点账号登录")
         self.btn_refresh.setEnabled(True)
         self.btn_refresh.setText("  刷新书架")
         self.table.setRowCount(0)
