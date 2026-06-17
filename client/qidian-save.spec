@@ -1,12 +1,21 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from PyInstaller.utils.hooks import collect_submodules
+
+
+hiddenimports = (
+    collect_submodules('PyQt6.QtWebEngineCore')
+    + collect_submodules('PyQt6.QtWebEngineWidgets')
+    + collect_submodules('PyQt6.QtWebChannel')
+)
+
 
 a = Analysis(
     ['run_desktop.py'],
     pathex=[],
     binaries=[],
     datas=[('adb', 'adb'), ('qidian_save/desktop/style', 'qidian_save/desktop/style')],
-    hiddenimports=[],
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

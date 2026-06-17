@@ -1,4 +1,5 @@
 """纯 API 调用封装 — 不包含任何业务逻辑"""
+import json
 import os, zipfile, tempfile
 import requests
 from requests.adapters import HTTPAdapter
@@ -8,11 +9,25 @@ from typing import Optional, Union
 
 class ApiError(Exception):
     """API 返回的业务错误（非 2xx 响应）"""
-    def __init__(self, status_code: int, message: str, url: str = ""):
+    def __init__(self, status_code: int, message: str | dict | list, url: str = ""):
         self.status_code = status_code
         self.message = message
         self.url = url
-        parts = [f"HTTP {status_code}", message]
+        if isinstance(message, str):
+            display_message = message
+        elif (
+            status_code == 429
+            and isinstance(message, dict)
+            and {"limit", "used", "remaining"}.issubset(message)
+        ):
+            display_message = (
+                f"日配额不足: 已用 {message.get('used')}/{message.get('limit')}, "
+                f"剩余 {message.get('remaining')}。"
+                f"详情: {json.dumps(message, ensure_ascii=False)}"
+            )
+        else:
+            display_message = json.dumps(message, ensure_ascii=False)
+        parts = [f"HTTP {status_code}", display_message]
         if url:
             parts.append(url)
         super().__init__(": ".join(parts))
