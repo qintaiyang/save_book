@@ -1,6 +1,6 @@
 [project]
 name = "qidian-save"
-version = "1.3.0"
+version = "1.3.1"
 description = "起点中文网书籍本地保存工具 — A local backup tool for Qidian Chinese novels"
 requires-python = ">=3.10"
 authors = [
