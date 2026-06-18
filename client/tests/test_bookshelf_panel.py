@@ -24,6 +24,12 @@ class FakeClient:
         ]}
 
 
+class FailingClient(FakeClient):
+    def get_qidian_bookshelf(self, session_id):
+        self.session_ids.append(session_id)
+        raise RuntimeError("server failed")
+
+
 class BookshelfPanelTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -48,6 +54,25 @@ class BookshelfPanelTests(unittest.TestCase):
 
         self.assertEqual(client.session_ids, [])
         self.assertIn("登录", panel.status_label.text())
+
+    def test_load_bookshelf_error_resets_refresh_button(self):
+        client = FailingClient()
+        panel = BookshelfPanel(client, lambda *_: None, get_apk_session_id=lambda: 42)
+
+        def run_now(func, ok_signal):
+            try:
+                ok_signal.emit(func())
+            except Exception as exc:
+                panel._sig.books_error.emit(str(exc))
+
+        panel._run = run_now
+
+        panel._load_bookshelf()
+
+        self.assertEqual(client.session_ids, [42])
+        self.assertTrue(panel.btn_refresh.isEnabled())
+        self.assertIn("刷新书架", panel.btn_refresh.text())
+        self.assertIn("加载失败: server failed", panel.status_label.text())
 
 
 if __name__ == "__main__":

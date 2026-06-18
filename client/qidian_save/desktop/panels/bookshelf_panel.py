@@ -25,7 +25,7 @@ class BookshelfPanel(QWidget):
         self._books_data = []  # [{id, name}, ...] 用于 cellClicked 查找
         self._sig = _BookshelfSignal()
         self._sig.books_ready.connect(self._on_books)
-        self._sig.books_error.connect(lambda e: self.status_label.setText(f"加载失败: {e}"))
+        self._sig.books_error.connect(self._on_books_error)
         self._sig.no_cookies.connect(self._on_no_cookies)
         self._init_ui()
 
@@ -149,3 +149,8 @@ class BookshelfPanel(QWidget):
         self.btn_refresh.setEnabled(True)
         self.btn_refresh.setText("  刷新书架")
         self.table.setRowCount(0)
+
+    def _on_books_error(self, message: str):
+        self.status_label.setText(f"加载失败: {message}")
+        self.btn_refresh.setEnabled(True)
+        self.btn_refresh.setText("  刷新书架")
