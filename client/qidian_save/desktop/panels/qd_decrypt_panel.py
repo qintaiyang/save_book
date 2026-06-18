@@ -17,6 +17,8 @@ from ..components import PageHeader, SurfaceCard, configure_page_layout
 
 # ── 工具函数（无解密逻辑） ─────────────────────────────────────────
 
+_MAX_QD_ZIP_UPLOAD_BYTES = 90_000_000
+
 def _load_chapter_names(book_dir: Path, book_id: str = "") -> dict:
     """从书籍目录的 SQLite DB 加载 ChapterId → (order_num, ChapterName)"""
     candidates = []
@@ -107,6 +109,63 @@ def _chapter_id_from_result_name(name: str) -> str:
     stem = Path(name).stem
     match = re.match(r"^(-?\d+)(?:\D|$)", stem)
     return match.group(1) if match else stem
+
+
+def _chunk_qd_files_by_size(qd_files: list[tuple], max_bytes: int) -> list[list[tuple]]:
+    chunks: list[list[tuple]] = []
+    current: list[tuple] = []
+    current_size = 0
+    for item in qd_files:
+        file_size = os.path.getsize(item[0])
+        if current and current_size + file_size > max_bytes:
+            chunks.append(current)
+            current = []
+            current_size = 0
+        current.append(item)
+        current_size += file_size
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _build_merged_book_text(
+    book_name: str,
+    txt_files: list[Path],
+    include_metadata: bool,
+    include_toc: bool,
+    include_chapter_separators: bool = False,
+) -> str:
+    lines = []
+    if include_toc:
+        lines.append(f"《{book_name}》")
+        lines.append("=" * 40)
+        for tf in txt_files:
+            title_clean = re.sub(r"^\d+\.\s*", "", tf.stem)
+            lines.append(f"  {title_clean}")
+        lines.append("=" * 40)
+        lines.append("")
+
+    chapter_texts = []
+    for tf in txt_files:
+        text = tf.read_text("utf-8", errors="replace")
+        if not include_metadata:
+            tlines = text.splitlines()
+            clean_start = 0
+            for i, tl in enumerate(tlines[:10]):
+                if any(kw in tl for kw in ["版权所有", "本书来自", "www.", ".com", "免责"]):
+                    clean_start = i + 1
+                else:
+                    break
+            text = "\n".join(tlines[clean_start:]).strip()
+        if include_chapter_separators:
+            title_clean = re.sub(r"^\d+\.\s*", "", tf.stem)
+            text = f"{'=' * 20} {title_clean} {'=' * 20}\n\n{text}"
+        chapter_texts.append(text)
+
+    body = "\n\n".join(chapter_texts)
+    if lines:
+        return "\n".join(lines).rstrip() + "\n\n" + body
+    return body
 
 
 class _DecryptSignal(QObject):
@@ -296,6 +355,10 @@ class QDDecryptPanel(QWidget):
         self.chk_include_toc = QCheckBox("包含目录")
         self.chk_include_toc.setChecked(False)
         options_row.addWidget(self.chk_include_toc)
+
+        self.chk_chapter_separator = QCheckBox("单章分割")
+        self.chk_chapter_separator.setChecked(False)
+        options_row.addWidget(self.chk_chapter_separator)
         options_row.addStretch()
 
         action_row.addStretch()
@@ -480,12 +543,16 @@ class QDDecryptPanel(QWidget):
 
                 if qimei36 or pool_b64:
                     cfg = load_config()
+                    cfg.pop("decryptSessionRef", None)
                     if qimei36:
                         cfg["qimei36"] = qimei36
                     if pool_b64:
                         cfg["pool_b64"] = pool_b64
                     save_config(cfg)
+                    self._decrypt_session_ref = ""
                     self._sig.params_ready.emit(qimei36, "", pool_b64)
+                    self._seed_status = "手动参数"
+                    self._sig.seed_status_changed.emit("手动参数")
 
                 summary = ", ".join(collected) if collected else "无可用参数"
                 self._sig.log.emit(f"🛠️ root 提取完成: {summary}")
@@ -778,8 +845,9 @@ class QDDecryptPanel(QWidget):
 
                     fp = book_dir / f"{ch_id}.qd"
                     if fp.exists():
-                        qd_files.append((str(fp), _qd_zip_arcname(chapter)))
-                        selected_by_chapter[ch_id] = {**chapter, "bookDir": str(book_dir)}
+                        normalized_chapter = {**chapter, "bookDir": str(book_dir)}
+                        qd_files.append((str(fp), _qd_zip_arcname(normalized_chapter), normalized_chapter))
+                        selected_by_chapter[ch_id] = normalized_chapter
                     else:
                         self._sig.log.emit(f"⚠ 未找到章节文件: {chapter.get('userId', '')}/{bid}/{ch_id}.qd")
 
@@ -788,98 +856,107 @@ class QDDecryptPanel(QWidget):
                     self._set_busy_from_thread(False)
                     return
 
-                # 打包 zip 上传服务端解密
-                import time as _time
-                zip_path = os.path.join(tempfile.gettempdir(), f"qd_decrypt_{int(_time.time())}.zip")
-                with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                    for fp, arcname in qd_files:
-                        zf.write(fp, arcname)
-                    manifest = _build_qd_zip_manifest(list(selected_by_chapter.values()))
-                    zf.writestr("_manifest.json", json.dumps(manifest, ensure_ascii=False))
-                    for meta_path, arcname in _metadata_qd_entries(list(selected_by_chapter.values())):
-                        zf.write(meta_path, arcname)
-
-                self._sig.log.emit(f"已打包 {len(qd_files)} 个文件，上传服务端解密...")
-                if session_ref:
-                    result = self.client.decrypt_qd_zip(zip_path, decrypt_session_ref=session_ref)
-                else:
-                    result = self.client.decrypt_qd_zip(zip_path, qimei, uid, pool)
-                result_zip = result["zip_path"]
-                task_id = result.get("task_id")
-                if task_id:
-                    self._sig.log.emit(f"解密任务 ID: {task_id}")
-
                 success = 0
                 failed = 0
                 by_book = {}
-                with zipfile.ZipFile(result_zip, "r") as zf:
-                    for name in zf.namelist():
-                        if name == "_errors.json":
-                            try:
-                                errors = json.loads(zf.read(name))
-                                failed = len(errors)
-                                self._sig.log.emit(f"⚠️ {failed} 章解密失败")
-                            except Exception:
-                                pass
-                            continue
+                chunks = _chunk_qd_files_by_size(qd_files, _MAX_QD_ZIP_UPLOAD_BYTES)
+                if len(chunks) > 1:
+                    self._sig.log.emit(f"文件较大，自动分 {len(chunks)} 批上传解密")
 
-                        if name == "_books.json":
-                            try:
-                                books = json.loads(zf.read(name).decode("utf-8"))
-                            except Exception:
-                                books = {}
-                            for book_id, meta in books.items():
-                                if not isinstance(meta, dict):
-                                    continue
-                                book_name = str(meta.get("bookName") or "").strip()
-                                if not book_name:
-                                    continue
-                                book_targets = [
-                                    c for c in selected_by_chapter.values()
-                                    if str(c.get("bookId")) == str(book_id)
-                                ]
-                                for chapter in book_targets[:1]:
-                                    book_dir = Path(chapter["bookDir"])
-                                    (book_dir / "_book_meta.json").write_text(
-                                        json.dumps({"bookName": book_name}, ensure_ascii=False),
-                                        encoding="utf-8",
-                                    )
-                                self._sig.book_name_ready.emit(str(book_id), book_name)
-                                self._sig.log.emit(f"✅ 书名已识别: {book_name}")
-                            continue
+                import time as _time
+                for batch_index, batch in enumerate(chunks, start=1):
+                    batch_chapters = [item[2] for item in batch]
+                    zip_path = os.path.join(
+                        tempfile.gettempdir(),
+                        f"qd_decrypt_{int(_time.time())}_{batch_index}.zip",
+                    )
+                    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                        for fp, arcname, _chapter in batch:
+                            zf.write(fp, arcname)
+                        manifest = _build_qd_zip_manifest(batch_chapters)
+                        zf.writestr("_manifest.json", json.dumps(manifest, ensure_ascii=False))
+                        for meta_path, arcname in _metadata_qd_entries(batch_chapters):
+                            zf.write(meta_path, arcname)
 
-                        if not name.endswith(".txt"):
-                            continue
+                    batch_label = f"第 {batch_index}/{len(chunks)} 批" if len(chunks) > 1 else ""
+                    self._sig.log.emit(f"已打包 {len(batch)} 个文件，上传服务端解密...{batch_label}")
+                    if session_ref:
+                        result = self.client.decrypt_qd_zip(zip_path, decrypt_session_ref=session_ref)
+                    else:
+                        result = self.client.decrypt_qd_zip(zip_path, qimei, uid, pool)
+                    result_zip = result["zip_path"]
+                    task_id = result.get("task_id")
+                    if task_id:
+                        self._sig.log.emit(f"解密任务 ID: {task_id}")
 
-                        # 服务端兼容返回 {chapterId}.txt 或 {chapterId}. 章节名.txt
-                        chapter_id = _chapter_id_from_result_name(name)
-                        target = selected_by_chapter.get(chapter_id)
-                        if not target:
-                            self._sig.log.emit(f"⚠ 未知章节 ID: {chapter_id}，跳过")
-                            failed += 1
-                            continue
+                    with zipfile.ZipFile(result_zip, "r") as zf:
+                        for name in zf.namelist():
+                            if name == "_errors.json":
+                                try:
+                                    errors = json.loads(zf.read(name))
+                                    failed += len(errors)
+                                    self._sig.log.emit(f"⚠️ {len(errors)} 章解密失败")
+                                except Exception:
+                                    pass
+                                continue
 
-                        bid = target["bookId"]
-                        book_dir = Path(target["bookDir"])
-                        name_map = _load_chapter_names(book_dir, bid)
-                        entry = name_map.get(chapter_id, None)
-                        if entry:
-                            order_num, ch_name = entry
-                            safe_name = _sanitize_filename(ch_name)
-                            digits = name_map.get("_digits", 0)
-                            out_name = f"{order_num:0{digits}d}. {safe_name}.txt" if digits else name
-                        else:
-                            out_name = name
-                        out_path = book_dir / out_name
-                        counter = 1
-                        while out_path.exists():
-                            out_path = book_dir / f"{out_path.stem}_{counter}.txt"
-                            counter += 1
-                        out_path.write_bytes(zf.read(name))
-                        success += 1
-                        by_book.setdefault(bid, 0)
-                        by_book[bid] += 1
-                        self._sig.log.emit(f"✅ {out_name}")
+                            if name == "_books.json":
+                                try:
+                                    books = json.loads(zf.read(name).decode("utf-8"))
+                                except Exception:
+                                    books = {}
+                                for book_id, meta in books.items():
+                                    if not isinstance(meta, dict):
+                                        continue
+                                    book_name = str(meta.get("bookName") or "").strip()
+                                    if not book_name:
+                                        continue
+                                    book_targets = [
+                                        c for c in selected_by_chapter.values()
+                                        if str(c.get("bookId")) == str(book_id)
+                                    ]
+                                    for chapter in book_targets[:1]:
+                                        book_dir = Path(chapter["bookDir"])
+                                        (book_dir / "_book_meta.json").write_text(
+                                            json.dumps({"bookName": book_name}, ensure_ascii=False),
+                                            encoding="utf-8",
+                                        )
+                                    self._sig.book_name_ready.emit(str(book_id), book_name)
+                                    self._sig.log.emit(f"✅ 书名已识别: {book_name}")
+                                continue
+
+                            if not name.endswith(".txt"):
+                                continue
+
+                            # 服务端兼容返回 {chapterId}.txt 或 {chapterId}. 章节名.txt
+                            chapter_id = _chapter_id_from_result_name(name)
+                            target = selected_by_chapter.get(chapter_id)
+                            if not target:
+                                self._sig.log.emit(f"⚠ 未知章节 ID: {chapter_id}，跳过")
+                                failed += 1
+                                continue
+
+                            bid = target["bookId"]
+                            book_dir = Path(target["bookDir"])
+                            name_map = _load_chapter_names(book_dir, bid)
+                            entry = name_map.get(chapter_id, None)
+                            if entry:
+                                order_num, ch_name = entry
+                                safe_name = _sanitize_filename(ch_name)
+                                digits = name_map.get("_digits", 0)
+                                out_name = f"{order_num:0{digits}d}. {safe_name}.txt" if digits else name
+                            else:
+                                out_name = name
+                            out_path = book_dir / out_name
+                            counter = 1
+                            while out_path.exists():
+                                out_path = book_dir / f"{out_path.stem}_{counter}.txt"
+                                counter += 1
+                            out_path.write_bytes(zf.read(name))
+                            success += 1
+                            by_book.setdefault(bid, 0)
+                            by_book[bid] += 1
+                            self._sig.log.emit(f"✅ {out_name}")
 
                 by_book_str = ", ".join(f"{k}: {v}章" for k, v in by_book.items())
                 self._pending_open_dir = self._qd_dir or self._qd_default_dir()
@@ -909,6 +986,7 @@ class QDDecryptPanel(QWidget):
         base_dir = self._qd_dir or self._qd_default_dir()
         include_metadata = not self.chk_no_copyright.isChecked()
         include_toc = self.chk_include_toc.isChecked()
+        include_chapter_separators = self.chk_chapter_separator.isChecked()
         self._set_busy(True, "合并中...")
         self._sig.log.emit(f"开始合并，扫描目录: {base_dir}")
 
@@ -943,7 +1021,10 @@ class QDDecryptPanel(QWidget):
 
                         book_name = self._get_book_name(book_dir, book_id) or f"书籍{book_id}"
                         # 将单个书籍目录下的所有 .txt 按文件名排序后合并到一条记录
-                        book_groups[book_name] = tz_files
+                        book_groups[(user_dir.name, book_id)] = {
+                            "book_name": book_name,
+                            "txt_files": tz_files,
+                        }
                         total_found += len(tz_files)
                         self._sig.log.emit(f"  找到 {book_name}: {len(tz_files)} 章")
 
@@ -953,34 +1034,22 @@ class QDDecryptPanel(QWidget):
                     return
 
                 total_merged = 0
-                for book_name, txt_files in sorted(book_groups.items()):
+                used_names = set()
+                for (_uid, book_id), group in sorted(book_groups.items()):
+                    book_name = group["book_name"]
+                    txt_files = group["txt_files"]
                     safe_name = _sanitize_filename(book_name)
                     out_path = merged_dir / f"{safe_name}.txt"
-                    lines = []
-                    if include_toc:
-                        lines.append(f"《{book_name}》")
-                        lines.append("=" * 40)
-                        for tf in txt_files:
-                            title_clean = re.sub(r"^\d+\.\s*", "", tf.stem)
-                            lines.append(f"  {title_clean}")
-                        lines.append("=" * 40)
-                        lines.append("")
-
-                    chapter_texts = []
-                    for tf in txt_files:
-                        text = tf.read_text("utf-8", errors="replace")
-                        if not include_metadata:
-                            tlines = text.splitlines()
-                            clean_start = 0
-                            for i, tl in enumerate(tlines[:10]):
-                                if any(kw in tl for kw in ["版权所有", "本书来自", "www.", ".com", "免责"]):
-                                    clean_start = i + 1
-                                else:
-                                    break
-                            text = "\n".join(tlines[clean_start:]).strip()
-                        chapter_texts.append(text)
-
-                    merged_text = "\n\n".join(chapter_texts)
+                    if out_path.name in used_names or out_path.exists():
+                        out_path = merged_dir / f"{safe_name}_{book_id}.txt"
+                    used_names.add(out_path.name)
+                    merged_text = _build_merged_book_text(
+                        book_name,
+                        txt_files,
+                        include_metadata=include_metadata,
+                        include_toc=include_toc,
+                        include_chapter_separators=include_chapter_separators,
+                    )
                     out_path.write_text(merged_text, encoding="utf-8")
                     self._sig.log.emit(f"  ✅ 已合并: {safe_name}.txt ({len(txt_files)} 章)")
                     total_merged += len(txt_files)
@@ -1017,6 +1086,8 @@ class QDDecryptPanel(QWidget):
         """Auto-load config on startup without logging."""
         try:
             cfg = _load_adb_config()
+            self.input_qimei.setText(cfg.get("qimei36", ""))
+            self.input_pool.setText(cfg.get("pool_b64", ""))
             self._decrypt_session_ref = cfg.get("decryptSessionRef", "")
             if self._decrypt_session_ref:
                 self._seed_status = "已就绪"
@@ -1052,6 +1123,11 @@ class QDDecryptPanel(QWidget):
             self.input_qimei.setText(qimei36)
         if pool_b64:
             self.input_pool.setText(pool_b64)
+        if qimei36 or pool_b64:
+            self._decrypt_session_ref = ""
+            self._seed_status = "手动参数"
+            self.label_seed_status.setText("手动参数")
+            self._update_param_inputs_state()
 
     def _update_param_inputs_state(self):
         """有 decryptSessionRef 时禁用手动输入框，防止误输入冲突参数。"""

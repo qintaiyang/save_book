@@ -65,6 +65,11 @@ class BookDetailApkBackupTests(unittest.TestCase):
         self.assertEqual(target_ref["bookId"], "book-1")
         self.assertEqual(target_ref["bookName"], "测试书")
         self.assertEqual(target_ref["chapterIds"], [101])
+        self.assertEqual(target_ref["chapterNames"], {"101": "第一章"})
+        self.assertEqual(
+            target_ref["chapters"],
+            [{"chapterId": "101", "chapterName": "第一章"}],
+        )
         self.assertEqual(target_ref["downloadMode"], "batch")
 
     def test_apk_mode_full_selection_still_uses_explicit_chapter_ids(self):

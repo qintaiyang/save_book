@@ -2,8 +2,10 @@ import json
 from pathlib import Path
 
 from qidian_save.desktop.panels.qd_decrypt_panel import (
+    _build_merged_book_text,
     _build_qd_zip_manifest,
     _chapter_id_from_result_name,
+    _chunk_qd_files_by_size,
     _metadata_qd_entries,
     _qd_zip_arcname,
 )
@@ -62,3 +64,80 @@ def test_chapter_id_from_result_name_supports_named_server_output():
     assert _chapter_id_from_result_name("461.txt") == "461"
     assert _chapter_id_from_result_name("461. 第471章 骄阳似我.txt") == "461"
     assert _chapter_id_from_result_name("nested/461. 第471章 骄阳似我.txt") == "461"
+
+
+def test_build_merged_book_text_includes_toc_when_enabled(tmp_path):
+    chapter1 = tmp_path / "001. 第一章.txt"
+    chapter2 = tmp_path / "002. 第二章.txt"
+    chapter1.write_text("正文一", encoding="utf-8")
+    chapter2.write_text("正文二", encoding="utf-8")
+
+    text = _build_merged_book_text(
+        "测试书",
+        [chapter1, chapter2],
+        include_metadata=True,
+        include_toc=True,
+    )
+
+    assert "《测试书》" in text
+    assert "第一章" in text
+    assert "第二章" in text
+    assert "正文一" in text
+    assert "正文二" in text
+
+
+def test_build_merged_book_text_strips_leading_metadata(tmp_path):
+    chapter = tmp_path / "001. 第一章.txt"
+    chapter.write_text("版权所有\nwww.example.com\n正文", encoding="utf-8")
+
+    text = _build_merged_book_text(
+        "测试书",
+        [chapter],
+        include_metadata=False,
+        include_toc=False,
+    )
+
+    assert text == "正文"
+
+
+def test_build_merged_book_text_can_add_chapter_separators(tmp_path):
+    chapter1 = tmp_path / "001. 第一章.txt"
+    chapter2 = tmp_path / "002. 第二章.txt"
+    chapter1.write_text("正文一", encoding="utf-8")
+    chapter2.write_text("正文二", encoding="utf-8")
+
+    text = _build_merged_book_text(
+        "测试书",
+        [chapter1, chapter2],
+        include_metadata=True,
+        include_toc=False,
+        include_chapter_separators=True,
+    )
+
+    assert "==================== 第一章 ====================" in text
+    assert "==================== 第二章 ====================" in text
+    assert "==================== 第一章 ====================\n\n正文一" in text
+    assert "==================== 第二章 ====================\n\n正文二" in text
+
+
+def test_chunk_qd_files_by_size_splits_before_limit(tmp_path):
+    first = tmp_path / "1.qd"
+    second = tmp_path / "2.qd"
+    third = tmp_path / "3.qd"
+    first.write_bytes(b"a" * 7)
+    second.write_bytes(b"b" * 7)
+    third.write_bytes(b"c" * 2)
+
+    chunks = _chunk_qd_files_by_size(
+        [
+            (str(first), "u/b/1.qd"),
+            (str(second), "u/b/2.qd"),
+            (str(third), "u/b/3.qd"),
+        ],
+        max_bytes=10,
+    )
+
+    assert chunks == [
+        [(str(first), "u/b/1.qd")],
+        [(str(second), "u/b/2.qd"), (str(third), "u/b/3.qd")],
+    ]

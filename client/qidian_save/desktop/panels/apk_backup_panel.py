@@ -4,6 +4,8 @@ import json
 import threading
 import io
 import zipfile
+import re
+from pathlib import Path
 
 from PyQt6.QtWidgets import (
     QLabel, QHBoxLayout, QPushButton, QTableWidget,
@@ -12,13 +14,75 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QObject, pyqtSignal
 
 from ...zip_utils import safe_extract_zip
+from ...zip_utils import sanitize_filename
 from ..components import PageHeader, StatCard, SurfaceCard, configure_page_layout
+
+
+def _chapter_names_from_target_ref(target_ref: dict) -> dict[str, str]:
+    names = {}
+    chapter_names = target_ref.get("chapterNames")
+    if isinstance(chapter_names, dict):
+        for key, value in chapter_names.items():
+            if value not in (None, ""):
+                names[str(key)] = str(value)
+    chapters = target_ref.get("chapters")
+    if isinstance(chapters, list):
+        for chapter in chapters:
+            if not isinstance(chapter, dict):
+                continue
+            chapter_id = chapter.get("chapterId") or chapter.get("id")
+            chapter_name = chapter.get("chapterName") or chapter.get("name")
+            if chapter_id not in (None, "") and chapter_name not in (None, ""):
+                names[str(chapter_id)] = str(chapter_name)
+    return names
+
+
+def _chapter_id_from_archive_name(path: Path) -> str:
+    stem = path.stem
+    stem = re.sub(r"^\d+\.\s*", "", stem)
+    parts = stem.split("_")
+    if len(parts) >= 3 and all(part.isdigit() for part in parts[:3]):
+        return parts[1]
+    return stem
+
+
+def _rename_downloaded_chapter_files(save_dir: str, saved_files: list[Path], target_ref: dict) -> list[Path]:
+    names = _chapter_names_from_target_ref(target_ref or {})
+    if not names:
+        return saved_files
+    chapter_ids = [str(v) for v in (target_ref or {}).get("chapterIds") or []]
+    renamed = []
+    used = set()
+    for index, path in enumerate(saved_files, start=1):
+        path = Path(path)
+        if path.suffix.lower() != ".txt":
+            renamed.append(path)
+            continue
+        chapter_id = _chapter_id_from_archive_name(path)
+        chapter_name = names.get(chapter_id)
+        if not chapter_name:
+            renamed.append(path)
+            continue
+        order = chapter_ids.index(chapter_id) + 1 if chapter_id in chapter_ids else index
+        target = Path(save_dir) / f"{order:03d}. {sanitize_filename(chapter_name, max_len=120)}.txt"
+        base_target = target
+        counter = 2
+        while target.exists() and target != path:
+            target = base_target.with_name(f"{base_target.stem}_{counter}{base_target.suffix}")
+            counter += 1
+        if target != path:
+            path.replace(target)
+        used.add(target.name)
+        renamed.append(target)
+    return renamed
 
 
 class _ApkSignals(QObject):
     task_ready = pyqtSignal(dict)
     artifacts_ready = pyqtSignal(list)
     error = pyqtSignal(str)
+    download_done = pyqtSignal(int, str)
+    download_error = pyqtSignal(str)
 
 
 class ApkBackupPanel(QWidget):
@@ -36,6 +100,8 @@ class ApkBackupPanel(QWidget):
         self._sig.task_ready.connect(self._on_task_ready)
         self._sig.artifacts_ready.connect(self._on_artifacts_ready)
         self._sig.error.connect(lambda msg: QMessageBox.warning(self, "在线备份", msg))
+        self._sig.download_done.connect(self._on_download_done)
+        self._sig.download_error.connect(self._on_download_error)
         self._init_ui()
 
     def _init_ui(self):
@@ -200,13 +266,34 @@ class ApkBackupPanel(QWidget):
         if not save_dir:
             return
 
-        try:
-            data = self.client.download_apk_task_archive(self.task_id)
-            with zipfile.ZipFile(io.BytesIO(data), "r") as zf:
-                saved_files = safe_extract_zip(zf, save_dir)
-            QMessageBox.information(
-                self, "下载完成",
-                f"已保存 {len(saved_files)} 个文件到:\n{save_dir}"
-            )
-        except Exception as e:
-            QMessageBox.warning(self, "下载失败", str(e))
+        self.btn_download.setEnabled(False)
+        self.btn_download.setText("下载中...")
+
+        def _do():
+            try:
+                data = self.client.download_apk_task_archive(self.task_id)
+                with zipfile.ZipFile(io.BytesIO(data), "r") as zf:
+                    saved_files = safe_extract_zip(zf, save_dir)
+                saved_files = _rename_downloaded_chapter_files(
+                    save_dir,
+                    saved_files,
+                    self._target_ref,
+                )
+                self._sig.download_done.emit(len(saved_files), save_dir)
+            except Exception as e:
+                self._sig.download_error.emit(str(e))
+
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _on_download_done(self, count: int, save_dir: str):
+        self.btn_download.setEnabled(True)
+        self.btn_download.setText("  下载结果")
+        QMessageBox.information(
+            self, "下载完成",
+            f"已保存 {count} 个文件到:\n{save_dir}"
+        )
+
+    def _on_download_error(self, message: str):
+        self.btn_download.setEnabled(True)
+        self.btn_download.setText("  下载结果")
+        QMessageBox.warning(self, "下载失败", message)

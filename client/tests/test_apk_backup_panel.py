@@ -1,7 +1,10 @@
 import os
 import unittest
 import sys
+import zipfile
+import io
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 CLIENT_DIR = Path(__file__).resolve().parents[1]
@@ -11,6 +14,7 @@ if str(CLIENT_DIR) not in sys.path:
 from PyQt6.QtWidgets import QApplication
 
 from qidian_save.desktop.panels.apk_backup_panel import ApkBackupPanel
+from qidian_save.desktop.panels.apk_backup_panel import _rename_downloaded_chapter_files
 
 
 class FakeClient:
@@ -24,6 +28,12 @@ class FakeClient:
 
     def download_apk_artifact(self, task_id, artifact_id):
         return b"chapter content"
+
+    def download_apk_task_archive(self, task_id):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("001. 第一章.txt", "正文")
+        return buf.getvalue()
 
 
 class ApkBackupPanelTests(unittest.TestCase):
@@ -121,6 +131,54 @@ class ApkBackupPanelTests(unittest.TestCase):
         self.assertIn("已登录", panel.login_status_label.text())
         panel.set_login_online(False)
         self.assertIn("请先到", panel.login_status_label.text())
+
+    def test_download_results_starts_worker_thread(self):
+        panel = ApkBackupPanel(FakeClient())
+        panel.task_id = 42
+        panel._task_status = "completed"
+        started = []
+
+        class CapturedThread:
+            def __init__(self, target, daemon=None):
+                self.target = target
+                self.daemon = daemon
+
+            def start(self):
+                started.append(self)
+
+        with patch(
+            "qidian_save.desktop.panels.apk_backup_panel.QFileDialog.getExistingDirectory",
+            return_value=str(Path.cwd()),
+        ), patch(
+            "qidian_save.desktop.panels.apk_backup_panel.threading.Thread",
+            CapturedThread,
+        ):
+            panel._download_results()
+
+        self.assertEqual(len(started), 1)
+        self.assertFalse(panel.btn_download.isEnabled())
+        self.assertIn("下载中", panel.btn_download.text())
+
+    def test_rename_downloaded_chapter_files_uses_target_ref_names(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old = Path(tmp) / "001. 1047720448_880699692_0.txt"
+            old.write_text("正文", encoding="utf-8")
+
+            renamed = _rename_downloaded_chapter_files(
+                tmp,
+                [old],
+                {
+                    "chapterIds": [880699692],
+                    "chapterNames": {"880699692": "第一章 真正章节名"},
+                },
+            )
+
+            new = Path(tmp) / "001. 第一章 真正章节名.txt"
+            self.assertEqual(renamed, [new])
+            self.assertFalse(old.exists())
+            self.assertEqual(new.read_text(encoding="utf-8"), "正文")
 
 
 if __name__ == "__main__":

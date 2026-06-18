@@ -288,17 +288,29 @@ class BookDetailPanel(QWidget):
 
     def _build_apk_target_ref(self, checked_indices: list[int]) -> dict:
         chapter_ids = []
+        chapter_names = {}
+        chapters = []
         for row in checked_indices:
             if row < 0 or row >= len(self._chapters):
                 continue
-            raw_id = self._chapters[row].get("chapterId")
+            chapter = self._chapters[row]
+            raw_id = chapter.get("chapterId")
             if raw_id in (None, ""):
                 continue
-            chapter_ids.append(int(raw_id))
+            chapter_id = int(raw_id)
+            chapter_name = str(chapter.get("chapterName") or raw_id)
+            chapter_ids.append(chapter_id)
+            chapter_names[str(chapter_id)] = chapter_name
+            chapters.append({
+                "chapterId": str(chapter_id),
+                "chapterName": chapter_name,
+            })
         return {
             "bookId": self.book_id,
             "bookName": self.book_name or self.label_title.text(),
             "chapterIds": chapter_ids,
+            "chapterNames": chapter_names,
+            "chapters": chapters,
             "chapterIndexes": checked_indices,
             "wholeBook": False,
             "downloadMode": "batch",
