@@ -6,6 +6,7 @@ from qidian_save.desktop.panels.qd_decrypt_panel import (
     _build_qd_zip_manifest,
     _chapter_id_from_result_name,
     _chunk_qd_files_by_size,
+    _decrypted_output_name,
     _metadata_qd_entries,
     _qd_zip_arcname,
 )
@@ -64,6 +65,17 @@ def test_chapter_id_from_result_name_supports_named_server_output():
     assert _chapter_id_from_result_name("461.txt") == "461"
     assert _chapter_id_from_result_name("461. 第471章 骄阳似我.txt") == "461"
     assert _chapter_id_from_result_name("nested/461. 第471章 骄阳似我.txt") == "461"
+
+
+def test_decrypted_output_name_falls_back_to_selected_chapter_name(tmp_path):
+    target = {
+        "bookId": "1047226185",
+        "chapterName": "第471章 骄阳似我·茶艺祖师！",
+    }
+
+    assert _decrypted_output_name("461.txt", "461", target, tmp_path) == (
+        "461. 第471章 骄阳似我·茶艺祖师！.txt"
+    )
 
 
 def test_build_merged_book_text_includes_toc_when_enabled(tmp_path):

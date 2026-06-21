@@ -111,6 +111,23 @@ def _chapter_id_from_result_name(name: str) -> str:
     return match.group(1) if match else stem
 
 
+def _decrypted_output_name(result_name: str, chapter_id: str, target: dict, book_dir: Path) -> str:
+    book_id = str(target.get("bookId", "")).strip()
+    name_map = _load_chapter_names(book_dir, book_id)
+    entry = name_map.get(chapter_id, None)
+    if entry:
+        order_num, ch_name = entry
+        safe_name = _sanitize_filename(ch_name)
+        digits = name_map.get("_digits", 0)
+        return f"{order_num:0{digits}d}. {safe_name}.txt" if digits else result_name
+
+    chapter_name = str(target.get("chapterName") or "").strip()
+    if chapter_name and chapter_name != chapter_id:
+        return f"{_sanitize_filename(chapter_id)}. {_sanitize_filename(chapter_name)}.txt"
+
+    return result_name
+
+
 def _chunk_qd_files_by_size(qd_files: list[tuple], max_bytes: int) -> list[list[tuple]]:
     chunks: list[list[tuple]] = []
     current: list[tuple] = []
@@ -938,15 +955,7 @@ class QDDecryptPanel(QWidget):
 
                             bid = target["bookId"]
                             book_dir = Path(target["bookDir"])
-                            name_map = _load_chapter_names(book_dir, bid)
-                            entry = name_map.get(chapter_id, None)
-                            if entry:
-                                order_num, ch_name = entry
-                                safe_name = _sanitize_filename(ch_name)
-                                digits = name_map.get("_digits", 0)
-                                out_name = f"{order_num:0{digits}d}. {safe_name}.txt" if digits else name
-                            else:
-                                out_name = name
+                            out_name = _decrypted_output_name(name, chapter_id, target, book_dir)
                             out_path = book_dir / out_name
                             counter = 1
                             while out_path.exists():

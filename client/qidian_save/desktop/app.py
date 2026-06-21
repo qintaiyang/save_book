@@ -355,7 +355,10 @@ class MainWindow(FluentWindow):
 
         def _run():
             try:
-                usage = self.client.get_usage()
+                if hasattr(self.client, "get_membership"):
+                    usage = self.client.get_membership()
+                else:
+                    usage = self.client.get_usage()
             except Exception:
                 return
             self._sig.usage_ready.emit(usage)
@@ -363,6 +366,12 @@ class MainWindow(FluentWindow):
         threading.Thread(target=_run, daemon=True).start()
 
     def _on_usage_ready(self, usage: dict):
+        if "quota" in usage:
+            quota = usage.get("quota") or {}
+            remaining = quota.get("remaining", 0)
+            total = quota.get("total", 0)
+            self.usage_indicator.setText(f"额度 {remaining} / {total} 次")
+            return
         self.usage_indicator.setText(f"今日 {usage['chaptersUsed']} / {usage['limit']} 次")
 
 

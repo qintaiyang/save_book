@@ -15,6 +15,12 @@ def _friendly_error(msg: str) -> str:
         return "邮箱或密码错误"
     if "REGISTER_USER_ALREADY_EXISTS" in msg:
         return "该邮箱已注册"
+    if "invite" in msg.lower() or "邀请码" in msg:
+        return "邀请码无效、已过期或已被使用"
+    if "QQ 邮箱" in msg or "Foxmail" in msg or "qq.com" in msg.lower() or "foxmail" in msg.lower():
+        return "注册仅支持 QQ 邮箱或 Foxmail 邮箱"
+    if "LOGIN_USER_NOT_ACTIVE" in msg:
+        return "账号未激活，请联系管理员"
     if "429" in msg:
         return "请求过于频繁，请稍后再试"
     return msg
@@ -126,6 +132,10 @@ class LoginPanel(QWidget):
         self.input_reg_username.setPlaceholderText("用户名")
         rf.addWidget(self.input_reg_username)
 
+        self.input_invite_code = QLineEdit()
+        self.input_invite_code.setPlaceholderText("邀请码")
+        rf.addWidget(self.input_invite_code)
+
         self.input_reg_password = QLineEdit()
         self.input_reg_password.setPlaceholderText("密码（至少 8 位）")
         self.input_reg_password.setEchoMode(QLineEdit.EchoMode.Password)
@@ -228,9 +238,10 @@ class LoginPanel(QWidget):
     def _do_register(self):
         email = self.input_reg_email.text().strip()
         username = self.input_reg_username.text().strip()
+        invite_code = self.input_invite_code.text().strip()
         password = self.input_reg_password.text().strip()
 
-        if not email or not username or not password:
+        if not email or not username or not invite_code or not password:
             QMessageBox.warning(self, "提示", "请填写所有字段")
             return
         if len(password) < 8:
@@ -242,7 +253,7 @@ class LoginPanel(QWidget):
 
         def _run():
             try:
-                result = self.client.register(email, password, username)
+                result = self.client.register(email, password, username, invite_code=invite_code)
                 self._sig.register_ready.emit(result)
             except Exception as e:
                 self._sig.register_error.emit(str(e))
@@ -257,6 +268,7 @@ class LoginPanel(QWidget):
         self.input_email.setText(self.input_reg_email.text())
         self.input_reg_email.clear()
         self.input_reg_username.clear()
+        self.input_invite_code.clear()
         self.input_reg_password.clear()
 
     # ── Forgot password ──

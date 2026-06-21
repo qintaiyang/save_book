@@ -115,11 +115,14 @@ class QidianSaveClient:
 
     # ── Auth: fastapi-users ──
 
-    def register(self, email: str, password: str, username: str) -> dict:
+    def register(self, email: str, password: str, username: str, invite_code: str = "") -> dict:
         """注册新用户（免认证）"""
-        return self._post("/auth/register", json={
+        body = {
             "email": email, "password": password, "username": username,
-        })
+        }
+        if invite_code:
+            body["inviteCode"] = invite_code
+        return self._post("/auth/register", json=body)
 
     def login_jwt(self, email: str, password: str) -> dict:
         """邮箱+密码登录，返回 {"access_token": "...", "token_type": "bearer"}（免认证）
@@ -396,3 +399,12 @@ class QidianSaveClient:
 
     def get_usage(self) -> dict:
         return self._get("/api/usage/today")
+
+    def get_membership(self) -> dict:
+        return self._get("/api/me/membership")
+
+    def bind_card(self, code: str) -> dict:
+        return self._post("/api/me/cards/bind", json={"code": code})
+
+    def unbind_card(self) -> dict:
+        return self._post("/api/me/cards/unbind")
