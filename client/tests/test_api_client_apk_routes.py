@@ -12,7 +12,7 @@ from qidian_save.api_client import ApiError, QidianSaveClient
 class FakeResponse:
     status_code = 429
     reason = "Too Many Requests"
-    url = "https://autohelp.asia/api/decrypt/qd-zip"
+    url = "http://savebook.asia/api/decrypt/qd-zip"
 
     def json(self):
         return {
@@ -47,7 +47,7 @@ class ApiClientApkRouteTests(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 429)
         self.assertIn("日配额不足", str(ctx.exception))
         self.assertIn("remaining", str(ctx.exception))
-        self.assertIn("https://autohelp.asia/api/decrypt/qd-zip", str(ctx.exception))
+        self.assertIn("http://savebook.asia/api/decrypt/qd-zip", str(ctx.exception))
 
 
 if __name__ == "__main__":

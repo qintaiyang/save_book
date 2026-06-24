@@ -105,7 +105,7 @@ python -m qidian_save usage
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `QIDIAN_SAVE_URL` | 点备服务端地址 | `https://autohelp.asia/` |
+| `QIDIAN_SAVE_URL` | 点备服务端地址 | `http://savebook.asia/` |
 | `QIDIAN_SAVE_TOKEN` | 点备账号 JWT，用于自动登录 | 空 |
 
 ## 隐私与安全边界

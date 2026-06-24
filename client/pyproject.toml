@@ -1,6 +1,6 @@
 [project]
 name = "qidian-save"
-version = "1.3.4"
+version = "1.3.5"
 description = "起点中文网书籍本地保存工具 — A local backup tool for Qidian Chinese novels"
 requires-python = ">=3.10"
 authors = [
@@ -28,9 +28,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://autohelp.asia"
+Homepage = "http://savebook.asia/"
 Source = "https://github.com/qintaiyang/save_book"
-Documentation = "https://autohelp.asia/docs"
+Documentation = "http://savebook.asia/docs"
 
 [project.scripts]
 qidian-save = "qidian_save.cli:main"
