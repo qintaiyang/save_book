@@ -1,1 +1,2 @@
 from .apk_backup_panel import ApkBackupPanel
+from .advanced_backup_panel import AdvancedBackupPanel

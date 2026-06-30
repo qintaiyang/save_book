@@ -182,6 +182,56 @@ Response: {"status": "ok"}
 ```
 清理任务目录和 Cookie。
 
+## 高级备份
+
+高级备份由服务端凭据执行。客户端不上传起点账号、Cookie、签名参数或解密材料，只调用以下公开接口。
+
+### 创建高级备份任务
+```
+POST /api/v1/advanced-backup/tasks
+Header: Authorization: Bearer <token>
+Body: {
+  "bookId": 1047720448,
+  "bookName": "书名",
+  "chapterIds": [880699692, 880699693],
+  "chapters": [
+    {"chapterId": "880699692", "chapterName": "第一章"}
+  ],
+  "mergeText": false,
+  "timeout": 60
+}
+Response: {
+  "taskId": 123,
+  "status": "queued",
+  "archiveUrl": "/api/v1/advanced-backup/tasks/123/archive"
+}
+```
+
+常见错误：
+
+| HTTP 状态码 | 说明 |
+|-------------|------|
+| 403 | 高级备份未开放，或当前账号/会员计划无权限 |
+| 503 | 服务端高级备份凭据缺失或不可用 |
+| 429 | 配额不足，或活动任务过多 |
+
+### 查看任务列表和状态
+```
+GET /api/v1/advanced-backup/tasks?limit=50
+Response: {"items": [{"taskId": 123, "status": "running", ...}]}
+
+GET /api/v1/advanced-backup/tasks/{taskId}
+Response: {"taskId": 123, "status": "completed", "progressDone": 2, "progressTotal": 2, ...}
+```
+
+### 下载归档
+```
+GET /api/v1/advanced-backup/tasks/{taskId}/archive
+Response: application/zip
+```
+
+任务尚未完成或工件尚不可用时，服务端可能返回 `409`，客户端应提示用户刷新状态后重试。
+
 ## .qd 解密
 
 ### 上传单个文件解密

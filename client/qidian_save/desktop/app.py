@@ -48,6 +48,7 @@ from .panels.search_panel import SearchPanel
 from .panels.book_detail_panel import BookDetailPanel
 from .panels.backup_panel import BackupPanel
 from .panels.apk_backup_panel import ApkBackupPanel
+from .panels.advanced_backup_panel import AdvancedBackupPanel
 from .panels.qd_decrypt_panel import QDDecryptPanel
 from .panels.usage_panel import UsagePanel
 from .panels.bookshelf_panel import BookshelfPanel
@@ -164,6 +165,7 @@ class MainWindow(FluentWindow):
             self._on_backup_started,
             get_apk_session_id=lambda: self.apk_session_id,
             on_apk_task_started=self._on_apk_task_started,
+            on_advanced_task_started=self._on_advanced_task_started,
             debug_mode=self.debug_mode,
         )
         self.panels["backup"]   = BackupPanel(self.client)
@@ -173,6 +175,7 @@ class MainWindow(FluentWindow):
             on_go_search=lambda: self.switchTo(self.panels["search"]),
             debug_mode=self.debug_mode,
         )
+        self.panels["advanced_backup"] = AdvancedBackupPanel(self.client)
         self.panels["decrypt"]  = QDDecryptPanel(self.client)
         self.panels["usage"]    = UsagePanel(self.client)
 
@@ -182,6 +185,7 @@ class MainWindow(FluentWindow):
             ("search",    FIF.SEARCH,           "搜索书籍", NavigationItemPosition.TOP),
             ("bookshelf", FIF.LIBRARY,          "书架",     NavigationItemPosition.TOP),
             ("apk_backup", FIF.APPLICATION,      "在线备份", NavigationItemPosition.TOP),
+            ("advanced_backup", FIF.CLOUD_DOWNLOAD, "高级备份", NavigationItemPosition.TOP),
             ("decrypt",   FIF.DEVELOPER_TOOLS,  "本地备份", NavigationItemPosition.TOP),
             ("usage",     FIF.HISTORY,          "历史记录", NavigationItemPosition.BOTTOM),
         ]
@@ -279,6 +283,13 @@ class MainWindow(FluentWindow):
         panel = self.panels["apk_backup"]
         if hasattr(panel, "load_task"):
             panel.load_task(task_id, target_ref=self.current_apk_target_ref)
+        self.switchTo(panel)
+
+    def _on_advanced_task_started(self, task_id: int, target_ref: dict = None):
+        self.current_task_id = task_id
+        panel = self.panels["advanced_backup"]
+        if hasattr(panel, "load_task"):
+            panel.load_task(task_id, target_ref=target_ref or {})
         self.switchTo(panel)
 
     # ── 主题 ───────────────────────────────────────────────

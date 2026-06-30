@@ -9,6 +9,7 @@ from PyQt6.QtCore import Qt, QObject, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont
 from ...qidian_client import get_catalog as qidian_catalog, load_cookies
 from ...proxy import parse_proxy_urls
+from ...advanced_backup import format_advanced_backup_error
 from ..components import PageHeader, SurfaceCard, configure_page_layout
 
 
@@ -16,6 +17,7 @@ class _DetailSignal(QObject):
     catalog_ready = pyqtSignal(dict)
     catalog_error = pyqtSignal(str)
     backup_done = pyqtSignal(int, bool, list, object)
+    advanced_backup_done = pyqtSignal(int, object)
     backup_failed = pyqtSignal(str)
     backup_finished = pyqtSignal()
     backup_warning = pyqtSignal(str)  # 可恢复的警告，不影响继续
@@ -31,6 +33,7 @@ class BookDetailPanel(QWidget):
         on_backup_started,
         get_apk_session_id=None,
         on_apk_task_started=None,
+        on_advanced_task_started=None,
         debug_mode: bool = False,
     ):
         super().__init__()
@@ -40,6 +43,7 @@ class BookDetailPanel(QWidget):
         self.on_backup_started = on_backup_started
         self.get_apk_session_id = get_apk_session_id or (lambda: 0)
         self.on_apk_task_started = on_apk_task_started
+        self.on_advanced_task_started = on_advanced_task_started
         self.book_id = ""
         self.book_name = ""
         self._chapters = []
@@ -47,6 +51,7 @@ class BookDetailPanel(QWidget):
         self._sig.catalog_ready.connect(self._on_catalog)
         self._sig.catalog_error.connect(lambda e: self.label_author.setText(f"获取目录失败: {e}"))
         self._sig.backup_done.connect(self._on_backup_done)
+        self._sig.advanced_backup_done.connect(self._on_advanced_backup_done)
         self._sig.backup_failed.connect(lambda e: QMessageBox.critical(self, "创建失败", e))
         self._sig.backup_finished.connect(self._on_backup_finished)
         self._last_clicked_row = -1
@@ -166,6 +171,12 @@ class BookDetailPanel(QWidget):
         self.btn_backup.clicked.connect(self._start_backup)
         cr.addWidget(self.btn_backup)
 
+        self.btn_advanced_backup = QPushButton("  高级备份")
+        self.btn_advanced_backup.setProperty("btn-type", "secondary")
+        self.btn_advanced_backup.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_advanced_backup.clicked.connect(self._start_advanced_backup_from_ui)
+        cr.addWidget(self.btn_advanced_backup)
+
         layout.addWidget(controls)
 
     # ── Public ──
@@ -267,6 +278,8 @@ class BookDetailPanel(QWidget):
                 count += 1
         self.label_selected.setText(f"已选 {count} 章")
         self.btn_backup.setEnabled(count > 0)
+        if hasattr(self, "btn_advanced_backup"):
+            self.btn_advanced_backup.setEnabled(count > 0)
 
     # ── Backup ──
 
@@ -318,6 +331,42 @@ class BookDetailPanel(QWidget):
             "mergeText": self.chk_merge.isChecked(),
         }
 
+    def _build_advanced_target_ref(self, checked_indices: list[int]) -> dict:
+        try:
+            book_id = int(self.book_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("bookId 必须是数字") from exc
+
+        chapter_ids = []
+        chapter_names = {}
+        chapters = []
+        for row in checked_indices:
+            if row < 0 or row >= len(self._chapters):
+                continue
+            chapter = self._chapters[row]
+            raw_id = chapter.get("chapterId")
+            if raw_id in (None, ""):
+                continue
+            chapter_id = int(raw_id)
+            chapter_name = str(chapter.get("chapterName") or raw_id)
+            chapter_ids.append(chapter_id)
+            chapter_names[str(chapter_id)] = chapter_name
+            chapters.append({
+                "chapterId": str(chapter_id),
+                "chapterName": chapter_name,
+            })
+        return {
+            "bookId": book_id,
+            "bookName": self.book_name or self.label_title.text(),
+            "chapterIds": chapter_ids,
+            "chapterNames": chapter_names,
+            "chapters": chapters,
+            "chapterIndexes": checked_indices,
+            "wholeBook": False,
+            "mergeText": self.chk_merge.isChecked(),
+            "timeout": 60,
+        }
+
     def _start_apk_backup(self, checked_indices: list[int]):
         session_id = int(self.get_apk_session_id() or 0)
         if not session_id:
@@ -343,6 +392,43 @@ class BookDetailPanel(QWidget):
             except Exception as e:
                 print(f"[detail] APK 备份创建异常: {e}", file=sys.stderr)
                 self._sig.backup_failed.emit(str(e))
+            finally:
+                self._sig.backup_finished.emit()
+
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _start_advanced_backup_from_ui(self):
+        if not self.book_id:
+            QMessageBox.warning(self, "提示", "请先选择一本书")
+            return
+        checked_rows = self._selected_rows()
+        if not checked_rows:
+            QMessageBox.warning(self, "提示", "请先勾选要备份的章节")
+            return
+        self._start_advanced_backup(sorted(checked_rows))
+
+    def _start_advanced_backup(self, checked_indices: list[int]):
+        try:
+            target_ref = self._build_advanced_target_ref(checked_indices)
+        except (TypeError, ValueError):
+            QMessageBox.warning(self, "提示", "目录里存在无效书籍或章节 ID，无法创建高级备份")
+            return
+        if not target_ref["chapterIds"]:
+            QMessageBox.warning(self, "提示", "没有可提交的章节 ID")
+            return
+
+        self.btn_backup.setEnabled(False)
+        self.btn_advanced_backup.setEnabled(False)
+        self.btn_advanced_backup.setText("创建任务...")
+
+        def _do():
+            try:
+                result = self.client.create_advanced_backup_task(target_ref)
+                task_id = result["taskId"]
+                self._sig.advanced_backup_done.emit(task_id, target_ref)
+            except Exception as e:
+                print(f"[detail] 高级备份创建异常: {e}", file=sys.stderr)
+                self._sig.backup_failed.emit(format_advanced_backup_error(e))
             finally:
                 self._sig.backup_finished.emit()
 
@@ -427,6 +513,10 @@ class BookDetailPanel(QWidget):
     def _on_backup_finished(self):
         self.btn_backup.setEnabled(True)
         self.btn_backup.setText("  开始在线备份")
+        if hasattr(self, "btn_advanced_backup"):
+            self.btn_advanced_backup.setEnabled(True)
+            self.btn_advanced_backup.setText("  高级备份")
+        self._update_selected_count()
 
     def _on_backup_done(
         self,
@@ -444,3 +534,7 @@ class BookDetailPanel(QWidget):
             checked_indices,
             backup_options,
         )
+
+    def _on_advanced_backup_done(self, task_id: int, target_ref: dict):
+        if self.on_advanced_task_started:
+            self.on_advanced_task_started(task_id, target_ref)

@@ -20,7 +20,7 @@ class PyprojectMetadataTests(unittest.TestCase):
     def test_release_metadata_points_to_savebook_domain(self):
         data = tomllib.loads((ROOT / "client" / "pyproject.toml").read_text(encoding="utf-8"))
         project = data["project"]
-        self.assertEqual(project["version"], "1.3.5")
+        self.assertEqual(project["version"], "1.3.6")
         self.assertEqual(project["urls"]["Homepage"], "http://savebook.asia/")
         self.assertEqual(project["urls"]["Documentation"], "http://savebook.asia/docs")
 

@@ -294,6 +294,62 @@ class QidianSaveClient:
         """通过服务端 App API 获取起点书架."""
         return self._post("/api/qidian/bookshelf", json={"session_id": int(session_id)})
 
+    # ── Advanced Backup Open API ──
+
+    @staticmethod
+    def _advanced_backup_request_body(target_ref: dict) -> dict:
+        raw = dict(target_ref or {})
+        body = {
+            "bookId": int(raw.get("bookId")),
+            "bookName": str(raw.get("bookName") or ""),
+            "chapterIds": [int(item) for item in raw.get("chapterIds") or []],
+            "chapters": list(raw.get("chapters") or []),
+            "mergeText": bool(raw.get("mergeText")),
+            "wholeBook": bool(raw.get("wholeBook", False)),
+        }
+        if raw.get("timeout") not in (None, ""):
+            body["timeout"] = int(raw.get("timeout"))
+        return body
+
+    def create_advanced_backup_task(self, target_ref: dict) -> dict:
+        return self._post(
+            "/api/v1/advanced-backup/tasks",
+            json=self._advanced_backup_request_body(target_ref),
+        )
+
+    def list_advanced_backup_tasks(self, limit: int = 50) -> list:
+        data = self._get(
+            "/api/v1/advanced-backup/tasks",
+            params={"limit": int(limit or 50)},
+        )
+        return data.get("items", [])
+
+    def get_advanced_backup_task(self, task_id: int) -> dict:
+        return self._get(f"/api/v1/advanced-backup/tasks/{task_id}")
+
+    def list_advanced_backup_task_artifacts(self, task_id: int) -> list:
+        data = self._get(f"/api/v1/advanced-backup/tasks/{task_id}/artifacts")
+        return data.get("artifacts", [])
+
+    def download_advanced_backup_artifact(self, task_id: int, artifact_id: int) -> bytes:
+        resp = self.session.get(
+            f"{self.base_url}/api/v1/advanced-backup/tasks/{task_id}/artifacts/{artifact_id}",
+            timeout=300,
+        )
+        self._raise_on_error(resp)
+        return resp.content
+
+    def download_advanced_backup_task_archive(self, task_id: int) -> bytes:
+        resp = self.session.get(
+            f"{self.base_url}/api/v1/advanced-backup/tasks/{task_id}/archive",
+            timeout=300,
+        )
+        self._raise_on_error(resp)
+        return resp.content
+
+    def delete_advanced_backup_task(self, task_id: int) -> dict:
+        return self._delete(f"/api/v1/advanced-backup/tasks/{task_id}")
+
     # ── .qd Decrypt — Zip workflow ──
 
     def decrypt_qd_zip(self, zip_path: str, qimei36: str = "", user_id: str = "",

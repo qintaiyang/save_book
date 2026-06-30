@@ -50,12 +50,17 @@ class FakeApiClient:
 def test_main_window_registers_apk_decrypt_backup_panel():
     from qidian_save.desktop.app import MainWindow
     from qidian_save.desktop.panels.apk_backup_panel import ApkBackupPanel
+    from qidian_save.desktop.panels.advanced_backup_panel import AdvancedBackupPanel
 
     window = MainWindow(FakeApiClient(), token="test-token")
     assert "apk_backup" in window.panels
+    assert "advanced_backup" in window.panels
     assert isinstance(window.panels["apk_backup"], ApkBackupPanel)
+    assert isinstance(window.panels["advanced_backup"], AdvancedBackupPanel)
     assert window.panels["apk_backup"].objectName() == "panel_apk_backup"
+    assert window.panels["advanced_backup"].objectName() == "panel_advanced_backup"
     assert any(window.stackedWidget.widget(i) is window.panels["apk_backup"] for i in range(window.stackedWidget.count()))
+    assert any(window.stackedWidget.widget(i) is window.panels["advanced_backup"] for i in range(window.stackedWidget.count()))
     assert not any(window.stackedWidget.widget(i) is window.panels["backup"] for i in range(window.stackedWidget.count()))
 
 
